@@ -5,6 +5,19 @@ updates:
     schedule:
       interval: weekly
       day: "friday"
+    rebase-strategy: "disabled"
+    assignees:
+      - "ClaudiodelaRiva"
+    open-pull-requests-limit: 20
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: "friday"
+    rebase-strategy: "disabled"
+    assignees:
+      - "ClaudiodelaRiva"
     open-pull-requests-limit: 20
 
   - package-ecosystem: github-actions
@@ -12,4 +25,7 @@ updates:
     schedule:
       interval: weekly
       day: "friday"
+    rebase-strategy: "disabled"
+    assignees:
+      - "ClaudiodelaRiva"
     open-pull-requests-limit: 20
