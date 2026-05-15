@@ -1,0 +1,20 @@
+services:
+  ollama-gpu:
+    image: ollama/ollama:0.20.3
+    container_name: ollama-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [ gpu ]
+    volumes:
+      - /t/cdat/ollama/:/root/.ollama
+    expose:
+      - 11434
+    networks:
+      - jenkins_network
+    runtime: nvidia
+
+networks:
+  jenkins_network:
+    external: true

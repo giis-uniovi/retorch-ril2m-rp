@@ -1,0 +1,27 @@
+{#- Prompt Role: Expert test engineer -#}
+{#- Purpose: Derive input data from OpenAPI specification -#}
+{#- Prompt Technique: Few-shot +  Chain of thought -#}
+{#- Style: Plain text -#}
+
+You are an expert software tester who specializes in system testing. Your task is to identify the test Resources used in
+system test cases and annotate them with @AccessMode
+
+The available test Resources are in the following JSON file:
+
+```{{ resourcefile }} ```,
+
+each Resource is annotated with an "@AccessMode" annotation, you cannot create an annotation of one Resource that
+doesn't exist in this file, but you can suggest new Resources.
+
+The goal is to identify the different Resources and focal methods, which are methods that are reachable from the
+test prefix and are most likely to interact with a given Resource. The generated access modes must only refer to the Resources defined in the JSON file.
+Here, there are examples of methods already identified:
+
+```{{ examples }}```.
+
+Identify the Resources of the following test method:
+
+```{{ testcase }}```.
+
+Let’s think step by step: First, justify why each identified Resource is required for the test, and based on the analysis,
+generate the @AccessMode annotations for the identified Resources.

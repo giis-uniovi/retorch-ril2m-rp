@@ -1,6 +1,58 @@
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = false
+
 [project]
 name = "retorch-ril2m-rp"
 version = "2024.0.0"
 dependencies = [
-    "ollama == 0.6.2"
+    "ollama == 0.6.2", # Required to interact with the models
+    "setuptools==82.0.1",
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "jinja2 == 3.1.6", # Used to generate the teplates
+    "chromadb==1.5.8", # Used to generate the embeedings.
+    "openpyxl==3.1.5"  # Used to generate Excel metric reports.
 ]
+
+requires-python = ">=3.12"
+
+authors = [
+    { name = "Cristian Augusto", email = "augustocristian@uniovi.es" },
+    { name = "Jesús Morán", email = "moranjesus@uniovi.es" },
+    { name = "Francesca Lonetti", email = "francesca.lonetti@isti.cnr.it" },
+    { name = "Antonia Bertolino", email = "antonia.bertolino@gssi.it" },
+    { name = "Javier Tuya", email = "tuya@uniovi.es" },
+    { name = "Claudio de la Riva", email = "claudio@uniovi.es" },
+
+]
+maintainers = [
+    { name = "Cristian Augusto", email = "augustocristian@uniovi.es" }
+]
+
+description = "Replication package of the paper titled ''TO-DO''"
+readme = "README.md"
+license = { file = "LICENSE" }
+
+[project.urls]
+Homepage = "https://github.com/giis-uniovi/retorch-ril2m-rp"
+Documentation = "https://readthedocs.org"
+Repository = "https://github.com/giis-uniovi/retorch-ril2m-rp"
+"Bug Tracker" = "https://github.com/giis-uniovi/retorch-ril2m-rp/issues"
+Changelog = "https://github.com/giis-uniovi/retorch-ril2m-rp/blob/master/CHANGELOG.md"
+
+[tool.pytest.ini_options]
+addopts = "--cov=ril2m --cov-report=xml:coverage.xml --cov-branch"
+#Configurations related to logging in testing, first
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"
+
+log_file = "logs/pytest.log"
+log_file_level = "DEBUG"
+log_file_format = "%(asctime)s [%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+log_file_date_format = "%Y-%m-%d %H:%M:%S"
