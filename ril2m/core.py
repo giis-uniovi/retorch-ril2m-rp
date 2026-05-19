@@ -83,11 +83,20 @@ class TestCaseVectorStore:
         logger.info("  Indexed %d test cases into ChromaDB.", len(ids))
 
     def search(self, test_provided: str, top_k: int = TOP_K) -> list[dict]:
-        """Search for the top_k test cases more similar to the provided one (test_provided)."""
+        """Search for the top_k test cases more similar to the provided one (test_provided).
+
+        If the collection has fewer documents than *top_k*, n_results is clamped
+        to the collection size.  An empty collection returns an empty list (zero-shot).
+        """
+        available = self.count()
+        if available == 0:
+            logger.debug("Collection is empty — returning no similar cases (zero-shot).")
+            return []
+        effective_top_k = min(top_k, available)
         query_embedding = self.ollama.embed(test_provided)
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=effective_top_k,
             include=["metadatas", "distances", "documents"],
         )
         similar = []

@@ -175,12 +175,15 @@ def run_crossvalidation(
         sut, n_folds, n_runs, base_seed,
     )
 
-    if n_folds < 2:
-        logger.warning(
-            "[%s] Skipping — leave-one-out requires at least 2 test cases (found %d).",
-            sut, n_folds,
-        )
+    if n_folds < 1:
+        logger.warning("[%s] No test cases found — skipping.", sut)
         return []
+
+    if n_folds == 1:
+        logger.warning(
+            "[%s] Only 1 test case — fold will have 0 training examples (zero-shot).",
+            sut,
+        )
 
     repo_dir = os.path.join(chroma_base, experiment_tag, sut)
     out_dir = os.path.join(output_base, experiment_tag, sut)
