@@ -139,6 +139,7 @@ Runs the full leave-one-out cross-validation loop for all SUTs.
 |--------|---------|
 | `load_config()` | Load `n_runs`, `top_k`, `base_seed`, `models`, `temperatures` from `ril2m/input/config.json` |
 | `run_crossvalidation(sut, model, context_dir, chroma_base, output_base, n_runs, top_k, base_seed, temperature)` | Full build + query loop for one model×temperature; returns list of fold-info dicts |
+| `_model_param_count(model_tag)` | Parse parameter count from a model tag (e.g. `llama3:7b` → 7.0) for ordering |
 | `load_manifest(sut, chroma_base)` | Load the fold manifest for a SUT |
 
 **How it works (per fold):**
@@ -146,12 +147,17 @@ Runs the full leave-one-out cross-validation loop for all SUTs.
 2. For each test case `TC-k`: create a `JavaTestRAG` backed by `chroma_db/<sut>/fold_TC-k/`
    (shared across models — same embeddings) and index the N-1 training cases (skipped if already indexed).
 3. Query the LLM `n_runs` times — each run uses seed `base_seed + run_idx - 1`.
+   **Each run is wrapped in try/except — a failed run logs a full traceback and is skipped; the experiment continues.**
 4. Save each run immediately to `outputs/crossval/<experiment>/<sut>/TC-k_run_NN.txt`.
 5. Append run metrics to `outputs/metrics/<experiment>/metrics_<sut>_runs.csv`.
 6. After all runs: compute fold average, append to fold CSV, update per-experiment and global Excel.
 7. After all folds: write manifest and log summary.
 
-The `__main__` block iterates `models × temperatures × suts` from config, so the full grid runs unattended.
+The `__main__` block:
+- **Sorts models by parameter count (ascending)** so less powerful models (more prone to hallucinations) run first.
+- Logs a full **experiment plan summary table** at startup (models, temperatures, SUTs, runs/fold, total experiments).
+- Logs clear banners on each **model/temperature change** and each **SUT change**, with progress counters (e.g. `SUT 2/3`, `EXPERIMENT 2/4`).
+- Iterates `models × temperatures × suts` from config so the full grid runs unattended.
 
 All output files are written **incrementally** — if the job is cancelled, results up to
 the last completed run are preserved in CSV and Excel.
@@ -171,6 +177,23 @@ Computes M1-M8 metrics across all SUTs and writes output files.
 | M8 F1 / F1_Hall | Macro-averaged F1; F1_Hall counts only hallucinations as FP |
 
 N = `n_runs` from config. All CSVs and Excel sheets include `model` and `temperature` columns.
+
+**Annotation parsing (`parse_access_modes`):**
+- Guards against `None` / empty text input (returns `[]`).
+- `concurrency` field: converted to `int` via `_to_int`; non-integer LLM values (e.g. `concurrency="high"`) produce `concurrency=None` (→ syntactically incorrect in M1) **but are preserved in `concurrency_raw`** for hallucination analysis.
+- A `WARNING` log line is emitted when a non-integer concurrency is detected, including the raw value.
+- The `raw` field stores the full `@AccessMode(...)` string as emitted by the LLM.
+
+**Annotation dict fields:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `resID` | `str \| None` | Resource identifier |
+| `accessMode` | `str \| None` | One of READONLY / READWRITE / NOACCESS / DYNAMIC |
+| `concurrency` | `int \| None` | Parsed integer; `None` if absent or non-integer |
+| `concurrency_raw` | `str \| None` | Original LLM string (e.g. `"high"`); `None` if field absent |
+| `sharing` | `bool \| None` | `True`/`False`; `None` if field absent |
+| `raw` | `str` | Full `@AccessMode(...)` text |
 
 **Output layout:**
 
@@ -193,7 +216,7 @@ Split by responsibility:
 | `code_utils.py` | `extract_snippets` |
 | `excel_utils.py` | `write_metrics_excel`, global Excel helpers (openpyxl) |
 | `logging_config.py` | `setup_logging` |
-| `ollamaClient.py` | `OllamaClient` |
+| `ollamaClient.py` | `OllamaClient` — `chat()` and `embed()` guard response key access; unexpected Ollama response structure raises `ValueError` with a full traceback in the log |
 | `helpers.py` | Backwards-compatible re-export shim |
 
 ### `ril2m/core.py`

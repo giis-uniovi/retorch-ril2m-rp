@@ -31,9 +31,19 @@ class OllamaClient:
             timeout=60,
         )
         response.raise_for_status()
-        return response.json()["embeddings"][0]
+        try:
+            data = response.json()
+            return data["embeddings"][0]
+        except (KeyError, IndexError, ValueError) as exc:
+            logger.exception(
+                "embed: unexpected response structure from %s (model=%s): %s",
+                self.base_url, self.embed_model, response.text[:500],
+            )
+            raise ValueError(
+                f"embed: unexpected Ollama response — {exc}"
+            ) from exc
 
-    def chat(self, prompt: str, seed:int=None ) -> str:
+    def chat(self, prompt: str, seed: int = None) -> str:
         if seed is None:
             seed = random.randint(0, 2 ** 32 - 1)
         response = self.client.chat(
@@ -44,7 +54,15 @@ class OllamaClient:
                 },
             ],
             model=self.model,
-            options={"temperature": self.temperature,"seed":seed}
+            options={"temperature": self.temperature, "seed": seed},
         )
-
-        return response['message']['content']
+        try:
+            return response["message"]["content"]
+        except (KeyError, TypeError) as exc:
+            logger.exception(
+                "chat: unexpected response structure from %s (model=%s): %s",
+                self.base_url, self.model, response,
+            )
+            raise ValueError(
+                f"chat: unexpected Ollama response — {exc}"
+            ) from exc

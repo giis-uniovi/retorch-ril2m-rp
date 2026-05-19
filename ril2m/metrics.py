@@ -78,11 +78,20 @@ _RUN_CSV_FIELDS = [
 
 # ── parsing ───────────────────────────────────────────────────────────────────
 
+def _to_int(v) -> int | None:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_access_modes(text: str) -> list[dict]:
     """Extract all @AccessMode annotations from *text*.
 
     Returns a list of dicts: resID, accessMode, concurrency, sharing, raw.
     """
+    if not text:
+        return []
     results = []
     for m in _ACCESS_MODE_RE.finditer(text):
         body = m.group(1)
@@ -90,11 +99,19 @@ def parse_access_modes(text: str) -> list[dict]:
             k: (v_str or v_int or v_bool)
             for k, v_str, v_int, v_bool in _PARAM_RE.findall(body)
         }
+        concurrency_raw = params.get("concurrency") if "concurrency" in params else None
+        concurrency = _to_int(concurrency_raw) if concurrency_raw is not None else None
+        if concurrency_raw is not None and concurrency is None:
+            logger.warning(
+                "parse_access_modes: non-integer concurrency value %r — kept in concurrency_raw",
+                concurrency_raw,
+            )
         results.append(
             {
                 "resID": params.get("resID"),
                 "accessMode": params.get("accessMode"),
-                "concurrency": int(params["concurrency"]) if "concurrency" in params else None,
+                "concurrency": concurrency,
+                "concurrency_raw": concurrency_raw,
                 "sharing": params.get("sharing") == "true" if "sharing" in params else None,
                 "raw": m.group(0),
             }
