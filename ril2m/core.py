@@ -121,14 +121,29 @@ class JavaTestRAG:
     JavaTestRAG is responsible for handling Retrieval-Augmented Generation (RAG)
     operations for Java test-related workflows.
 
+    The vector store (ChromaDB + embeddings) is model-agnostic — embeddings are
+    always produced by ``EMBED_MODEL`` and can be shared across LLM experiments.
+    Only the chat LLM changes when *model* / *temperature* differ.
+
     Attributes:
-       persist_dir (str): uri with the directory where the embeedings would be stored.
+       persist_dir (str): directory where the ChromaDB embeddings are stored.
+       model (str): Ollama model used for annotation generation.
+       temperature (float): sampling temperature for the LLM.
     """
 
-    def __init__(self, persist_dir: str = "./knowledge_base"):
+    def __init__(
+        self,
+        persist_dir: str = "./knowledge_base",
+        model: str = DEFAULT_MODEL,
+        temperature: float = TEMPERATURE,
+    ):
         self.store = TestCaseVectorStore(persist_dir)
-        self.ollama = OllamaClient(temperature=TEMPERATURE, base_url=URI, model=DEFAULT_MODEL,
-                                   embed_model=EMBED_MODEL)
+        self.ollama = OllamaClient(
+            temperature=temperature,
+            base_url=URI,
+            model=model,
+            embed_model=EMBED_MODEL,
+        )
 
     def index_from_file(self, path: str):
         """Load and indexes the embeedings from a file."""

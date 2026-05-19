@@ -30,11 +30,10 @@ retorch-ril2m-rp/
 │   ├── core.py                        # RAG classes + querying entry point
 │   ├── crossvalidation.py             # Leave-one-out cross-validation (all SUTs)
 │   ├── metrics.py                     # M1-M8 metrics computation + CSV/Excel output
-│   ├── chroma_db/                     # Auto-generated ChromaDB fold databases
-│   │   └── <experiment_tag>/
-│   │       └── <repo>/
-│   │           ├── fold_TC-001/
-│   │           └── manifest.json
+│   ├── chroma_db/                     # Auto-generated ChromaDB fold databases (shared across models)
+│   │   └── <repo>/
+│   │       ├── fold_TC-001/
+│   │       └── manifest.json
 │   ├── helpers/
 │   │   ├── __init__.py                # Re-exports all helpers
 │   │   ├── helpers.py                 # Backwards-compat re-export shim
@@ -128,6 +127,8 @@ Single file controlling all experiment parameters:
 | `n_runs` | 10 | LLM queries per fold |
 | `top_k` | 5 | Similar examples included in the RAG prompt |
 | `base_seed` | 42 | Seed for run 1; run *i* uses `base_seed + i − 1` (deterministic) |
+| `models` | `["gpt-oss:20b"]` | Ollama model tags to evaluate; crossvalidation iterates over all |
+| `temperatures` | `[0.5]` | Sampling temperatures to evaluate; crossvalidation iterates over all |
 
 ### `ril2m/crossvalidation.py`
 Runs the full leave-one-out cross-validation loop for all SUTs.
@@ -136,19 +137,21 @@ Runs the full leave-one-out cross-validation loop for all SUTs.
 
 | Symbol | Purpose |
 |--------|---------|
-| `load_config()` | Load `n_runs`, `top_k`, `base_seed` from `ril2m/input/config.json` |
-| `run_crossvalidation(sut, context_dir, chroma_base, output_base, n_runs, top_k, base_seed)` | Full build + query loop; returns list of fold-info dicts |
+| `load_config()` | Load `n_runs`, `top_k`, `base_seed`, `models`, `temperatures` from `ril2m/input/config.json` |
+| `run_crossvalidation(sut, model, context_dir, chroma_base, output_base, n_runs, top_k, base_seed, temperature)` | Full build + query loop for one model×temperature; returns list of fold-info dicts |
 | `load_manifest(sut, chroma_base)` | Load the fold manifest for a SUT |
 
 **How it works (per fold):**
 1. Load `ragtestcases_<sut>.json` and `systemresources_<sut>.json`.
-2. For each test case `TC-k`: create a `JavaTestRAG` backed by `chroma_db/<experiment>/<sut>/fold_TC-k/`
-   and index the N-1 training cases (skipped if already indexed).
+2. For each test case `TC-k`: create a `JavaTestRAG` backed by `chroma_db/<sut>/fold_TC-k/`
+   (shared across models — same embeddings) and index the N-1 training cases (skipped if already indexed).
 3. Query the LLM `n_runs` times — each run uses seed `base_seed + run_idx - 1`.
 4. Save each run immediately to `outputs/crossval/<experiment>/<sut>/TC-k_run_NN.txt`.
 5. Append run metrics to `outputs/metrics/<experiment>/metrics_<sut>_runs.csv`.
 6. After all runs: compute fold average, append to fold CSV, update per-experiment and global Excel.
 7. After all folds: write manifest and log summary.
+
+The `__main__` block iterates `models × temperatures × suts` from config, so the full grid runs unattended.
 
 All output files are written **incrementally** — if the job is cancelled, results up to
 the last completed run are preserved in CSV and Excel.

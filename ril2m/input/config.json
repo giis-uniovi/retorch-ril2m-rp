@@ -1,5 +1,13 @@
 {
   "n_runs": 10,
   "top_k": 5,
-  "base_seed": 42
+  "base_seed": 42,
+  "temperatures": [0.5],
+  "models": [
+    "gemma4:e4b",
+    "gemma4:26b",
+    "gpt-oss:20b",
+    "qwen3-coder:30b",
+    "codellama:7b"
+  ]
 }

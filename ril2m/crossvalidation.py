@@ -6,13 +6,15 @@ For each SUT discovered in the context directory:
   1. Load the per-repo ragtestcases_<sut>.json.
   2. Build N ChromaDB databases — one per test case, each indexed with the N-1
      remaining cases (leave-one-out).  Already-indexed folds are skipped.
+     ChromaDB databases are shared across LLM models (same embedding model).
   3. For each fold, query the LLM *n_runs* times via the Jinja2 RAG pipeline to
      predict the @AccessMode annotations of the held-out test case.
-  4. Save each run's prediction to ``outputs/crossval/<sut>/TC-XXX_run_<i>.txt``.
+  4. Save each run's prediction to ``outputs/crossval/<experiment>/<sut>/TC-XXX_run_<i>.txt``.
   5. Write a manifest.json with fold metadata and all run paths.
 
 Configuration:
-    Edit ``ril2m/input/config.json`` to change ``n_runs`` and ``top_k``.
+    Edit ``ril2m/input/config.json`` to change ``n_runs``, ``top_k``, ``models``,
+    and ``temperatures``.
 
 Usage:
     poetry run python ril2m/crossvalidation.py
@@ -29,7 +31,13 @@ CHROMA_BASE = os.path.join(BASE_DIR, "chroma_db")
 OUTPUT_BASE = os.path.join(BASE_DIR, "..", "outputs", "crossval")
 _CONFIG_PATH = os.path.join(BASE_DIR, "input", "config.json")
 
-_CONFIG_DEFAULTS = {"n_runs": 10, "top_k": 5, "base_seed": 42}
+_CONFIG_DEFAULTS = {
+    "n_runs": 10,
+    "top_k": 5,
+    "base_seed": 42,
+    "temperatures": [0.5],
+    "models": ["gpt-oss:20b"],
+}
 
 
 # ── configuration ─────────────────────────────────────────────────────────────
@@ -43,6 +51,9 @@ def load_config() -> dict:
         with open(_CONFIG_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
         merged = {**_CONFIG_DEFAULTS, **cfg}
+        # back-compat: single "temperature" key → list
+        if "temperature" in merged and "temperatures" not in cfg:
+            merged["temperatures"] = [merged["temperature"]]
         logger.info("Config loaded from %s: %s", _CONFIG_PATH, merged)
         return merged
     logger.warning("config.json not found — using defaults: %s", _CONFIG_DEFAULTS)
@@ -101,40 +112,40 @@ def _available_suts(context_dir: str) -> list[str]:
 
 def run_crossvalidation(
     sut: str,
+    model: str | None = None,
     context_dir: str | None = None,
     chroma_base: str = CHROMA_BASE,
     output_base: str = OUTPUT_BASE,
     n_runs: int | None = None,
     top_k: int | None = None,
     base_seed: int | None = None,
+    temperature: float | None = None,
 ) -> list[dict]:
     """
-    Run leave-one-out cross-validation for *sut*.
+    Run leave-one-out cross-validation for one SUT with one LLM model.
 
-    For each test case in the SUT:
-    - A ChromaDB is built (or reused) with the remaining N-1 cases.
-    - The LLM is queried *n_runs* times with a deterministic seed per run
-      (``base_seed + run_idx - 1``) so the experiment is reproducible.
-    - Each run is saved to disk immediately after it completes.
-    - The fold metadata JSON and the SUT manifest are updated after every
-      completed run / fold so partial results survive a crash.
+    ChromaDB fold databases are **shared across models** because embeddings are
+    produced by a fixed embedding model (``EMBED_MODEL``), not by the generation
+    LLM.  Rebuilding them for every model would be wasteful.
 
     Parameters
     ----------
-    sut:        Short repository name (e.g. ``"fullteaching"``).
+    sut:         Short repository name (e.g. ``"fullteaching"``).
+    model:       Ollama model tag for generation (e.g. ``"gpt-oss:20b"``).
+                 Defaults to first entry in ``config.json → models``.
     context_dir: Directory containing context JSONs.
-    chroma_base: Root directory for ChromaDB fold databases.
-    output_base: Root directory for prediction outputs.
-    n_runs:     LLM queries per fold. Defaults to ``config.json`` value.
-    top_k:      Similar examples in the LLM prompt. Defaults to ``config.json`` value.
-    base_seed:  Seed for run 1; subsequent runs use ``base_seed + run_idx - 1``.
-                Defaults to ``config.json`` value.
+    chroma_base: Root directory for shared ChromaDB fold databases.
+    output_base: Root directory for prediction outputs (nested by experiment).
+    n_runs:      LLM queries per fold. Defaults to ``config.json`` value.
+    top_k:       Similar examples in the LLM prompt. Defaults to ``config.json`` value.
+    base_seed:   Seed for run 1; run i uses ``base_seed + i − 1``.
+    temperature: Sampling temperature. Defaults to first entry in ``config.json → temperatures``.
 
     Returns
     -------
     List of fold-info dicts (also written to ``chroma_db/<sut>/manifest.json``).
     """
-    from ril2m.core import CONTEXTS, DEFAULT_MODEL, TEMPERATURE, JavaTestRAG  # noqa: PLC0415
+    from ril2m.core import CONTEXTS, JavaTestRAG  # noqa: PLC0415
     from ril2m.metrics import (  # noqa: PLC0415
         OUTPUT_METRICS_DIR,
         _EXPERIMENT_DESCRIPTOR,
@@ -154,13 +165,16 @@ def run_crossvalidation(
         top_k = cfg["top_k"]
     if base_seed is None:
         base_seed = cfg["base_seed"]
+    if model is None:
+        model = cfg["models"][0]
+    if temperature is None:
+        temperature = cfg["temperatures"][0]
 
     if context_dir is None:
         context_dir = CONTEXTS
 
     # Build experiment tag: <model-name>_t<temperature>
-    model_name = DEFAULT_MODEL.replace(":", "-")
-    temperature = TEMPERATURE
+    model_name = model.replace(":", "-")
     experiment_tag = f"{model_name}_t{temperature}"
 
     metrics_dir = os.path.join(OUTPUT_METRICS_DIR, experiment_tag)
@@ -171,8 +185,8 @@ def run_crossvalidation(
     system_resource_ids = load_system_resources(sut, context_dir)
     n_folds = len(cases)
     logger.info(
-        "[%s] Starting cross-validation — %d fold(s) × %d run(s)  base_seed=%d",
-        sut, n_folds, n_runs, base_seed,
+        "[%s] Starting cross-validation — model=%s  temperature=%s  %d fold(s) × %d run(s)  base_seed=%d",
+        sut, model, temperature, n_folds, n_runs, base_seed,
     )
 
     if n_folds < 1:
@@ -185,7 +199,8 @@ def run_crossvalidation(
             sut,
         )
 
-    repo_dir = os.path.join(chroma_base, experiment_tag, sut)
+    # ChromaDB is shared across models — path does NOT include experiment_tag
+    repo_dir = os.path.join(chroma_base, sut)
     out_dir = os.path.join(output_base, experiment_tag, sut)
     exp_base = os.path.join(output_base, experiment_tag)
     manifest_path = os.path.join(repo_dir, "manifest.json")
@@ -197,7 +212,7 @@ def run_crossvalidation(
     if not os.path.exists(descriptor_path):
         with open(descriptor_path, "w", encoding="utf-8") as f:
             json.dump(
-                {"model": DEFAULT_MODEL, "model_name": model_name,
+                {"model": model, "model_name": model_name,
                  "temperature": temperature, "experiment_tag": experiment_tag},
                 f, indent=2,
             )
@@ -214,8 +229,8 @@ def run_crossvalidation(
 
         logger.info("[%s] Fold %d/%d — %s (%s)", sut, fold_idx, n_folds, fold_id, testname)
 
-        # ── 1. Build / reuse ChromaDB ─────────────────────────────────────────
-        rag = JavaTestRAG(persist_dir=db_path)
+        # ── 1. Build / reuse ChromaDB (shared across models) ──────────────────
+        rag = JavaTestRAG(persist_dir=db_path, model=model, temperature=temperature)
         if rag.store.count() > 0:
             logger.info("  Embedding: already indexed (%d docs), skipping", rag.store.count())
         else:
@@ -244,7 +259,7 @@ def run_crossvalidation(
             # Compute + append run metrics to CSV immediately
             run_metrics = append_run_metrics(
                 sut, excluded, run_idx, seed, response, system_resource_ids, metrics_dir,
-                model=DEFAULT_MODEL, temperature=temperature,
+                model=model, temperature=temperature,
             )
             run_metrics_list.append({"run_id": run_idx, "seed": seed,
                                      "filename": run_filename, **run_metrics})
@@ -261,19 +276,19 @@ def run_crossvalidation(
                     f, indent=2,
                 )
 
-        # ── 3. After all runs: fold average → per-experiment CSV + Excel ─────────
+        # ── 3. After all runs: fold average → per-experiment CSV + Excel ──────
         fold_detail = append_fold_metrics(
             sut, excluded, run_metrics_list, metrics_dir,
-            model=DEFAULT_MODEL, temperature=temperature,
+            model=model, temperature=temperature,
         )
         completed_fold_details.append(fold_detail)
 
         # Update global Excel (All Results + model sheet) immediately
-        append_fold_to_global(sut, DEFAULT_MODEL, fold_detail, OUTPUT_METRICS_DIR)
+        append_fold_to_global(sut, model, fold_detail, OUTPUT_METRICS_DIR)
 
         # Rebuild per-experiment Summary with partial results so far
         partial_summary = aggregate_sut_metrics(
-            sut, completed_fold_details, model=DEFAULT_MODEL, temperature=temperature,
+            sut, completed_fold_details, model=model, temperature=temperature,
         )
         flush_sut_summary([partial_summary], metrics_dir)
         # Rebuild global Summary with all completed SUTs across all experiments
@@ -315,7 +330,17 @@ if __name__ == "__main__":
     from ril2m.core import CONTEXTS  # noqa: PLC0415
 
     setup_logging()
+    cfg = load_config()
     suts = _available_suts(CONTEXTS)
+    models = cfg["models"]
+    temperatures = cfg["temperatures"]
+
     logger.info("SUTs discovered: %s", suts)
-    for _sut in suts:
-        run_crossvalidation(sut=_sut)
+    logger.info("Models: %s", models)
+    logger.info("Temperatures: %s", temperatures)
+
+    for _model in models:
+        for _temperature in temperatures:
+            logger.info("=== Model: %s  Temperature: %s ===", _model, _temperature)
+            for _sut in suts:
+                run_crossvalidation(sut=_sut, model=_model, temperature=_temperature)
