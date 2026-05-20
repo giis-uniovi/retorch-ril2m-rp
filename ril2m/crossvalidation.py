@@ -23,6 +23,7 @@ Usage:
 import json
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -242,38 +243,44 @@ def run_crossvalidation(
         for run_idx in range(1, n_runs + 1):
             seed = base_seed + run_idx - 1      # deterministic: 42, 43, 44, …
             logger.info("  Run %d/%d — seed=%d — querying LLM...", run_idx, n_runs, seed)
-            response = rag.query(
-                test_provided=excluded["code"],
-                top_k=top_k,
-                resource_file=resource_file,
-                seed=seed,
-            )
+            try:
+                response = rag.query(
+                    test_provided=excluded["code"],
+                    top_k=top_k,
+                    resource_file=resource_file,
+                    seed=seed,
+                )
 
-            # Save prediction text immediately
-            run_filename = f"{fold_id}_run_{run_idx:02d}.txt"
-            run_path = os.path.join(out_dir, run_filename)
-            with open(run_path, "w", encoding="utf-8") as f:
-                f.write(response)
-            logger.info("  Run %d/%d — saved → %s", run_idx, n_runs, run_filename)
+                # Save prediction text immediately
+                run_filename = f"{fold_id}_run_{run_idx:02d}.txt"
+                run_path = os.path.join(out_dir, run_filename)
+                with open(run_path, "w", encoding="utf-8") as f:
+                    f.write(response)
+                logger.info("  Run %d/%d — saved → %s", run_idx, n_runs, run_filename)
 
-            # Compute + append run metrics to CSV immediately
-            run_metrics = append_run_metrics(
-                sut, excluded, run_idx, seed, response, system_resource_ids, metrics_dir,
-                model=model, temperature=temperature,
-            )
-            run_metrics_list.append({"run_id": run_idx, "seed": seed,
-                                     "filename": run_filename, **run_metrics})
+                # Compute + append run metrics to CSV immediately
+                run_metrics = append_run_metrics(
+                    sut, excluded, run_idx, seed, response, system_resource_ids, metrics_dir,
+                    model=model, temperature=temperature,
+                )
+                run_metrics_list.append({"run_id": run_idx, "seed": seed,
+                                         "filename": run_filename, **run_metrics})
 
-            # Update fold metadata JSON after every run (partial results survive crashes)
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "sut": sut, "fold_id": fold_id, "testname": testname,
-                        "training_size": len(training),
-                        "n_runs_planned": n_runs, "n_runs_completed": run_idx,
-                        "base_seed": base_seed, "runs": run_metrics_list,
-                    },
-                    f, indent=2,
+                # Update fold metadata JSON after every run (partial results survive crashes)
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        {
+                            "sut": sut, "fold_id": fold_id, "testname": testname,
+                            "training_size": len(training),
+                            "n_runs_planned": n_runs, "n_runs_completed": run_idx,
+                            "base_seed": base_seed, "runs": run_metrics_list,
+                        },
+                        f, indent=2,
+                    )
+            except Exception:
+                logger.exception(
+                    "  Run %d/%d — seed=%d — unexpected error, skipping this run",
+                    run_idx, n_runs, seed,
                 )
 
         # ── 3. After all runs: fold average → per-experiment CSV + Excel ──────
@@ -316,6 +323,20 @@ def run_crossvalidation(
     return folds
 
 
+def _model_param_count(model_tag: str) -> float:
+    """Return approximate parameter count from a model tag (e.g. 'llama3:7b' → 7.0).
+
+    Models whose size cannot be parsed sort last (inf) so unknown models run after
+    known smaller ones.  Mixture-of-experts tags like '8x7b' are treated as 56b.
+    """
+    tag = model_tag.split(":")[-1]
+    moe = re.search(r'(\d+)x(\d+(?:\.\d+)?)b', tag, re.IGNORECASE)
+    if moe:
+        return float(moe.group(1)) * float(moe.group(2))
+    m = re.search(r'(\d+(?:\.\d+)?)b', tag, re.IGNORECASE)
+    return float(m.group(1)) if m else float("inf")
+
+
 def load_manifest(sut: str, chroma_base: str = CHROMA_BASE) -> list[dict]:
     """Load the fold manifest for *sut*."""
     path = os.path.join(chroma_base, sut, "manifest.json")
@@ -332,15 +353,49 @@ if __name__ == "__main__":
     setup_logging()
     cfg = load_config()
     suts = _available_suts(CONTEXTS)
-    models = cfg["models"]
+    models = sorted(cfg["models"], key=_model_param_count)
     temperatures = cfg["temperatures"]
+    n_runs = cfg["n_runs"]
 
-    logger.info("SUTs discovered: %s", suts)
-    logger.info("Models: %s", models)
-    logger.info("Temperatures: %s", temperatures)
+    n_experiments = len(models) * len(temperatures)
+    n_total_sut_runs = n_experiments * len(suts)
 
+    sep = "═" * 72
+    logger.info(sep)
+    logger.info("  EXPERIMENT PLAN")
+    logger.info(sep)
+    logger.info("  %-24s %s", "Models (least→most):", " | ".join(
+        f"{m} (~{_model_param_count(m):.0f}B)" if _model_param_count(m) != float('inf') else m
+        for m in models
+    ))
+    logger.info("  %-24s %s", "Temperatures:", " | ".join(str(t) for t in temperatures))
+    logger.info("  %-24s %s", "SUTs:", " | ".join(suts) if suts else "(none found)")
+    logger.info("  %-24s %d", "Runs per fold:", n_runs)
+    logger.info("  %-24s %d  (%d models × %d temperatures)",
+                "Total experiments:", n_experiments, len(models), len(temperatures))
+    logger.info("  %-24s %d  (%d experiments × %d SUTs)",
+                "Total SUT runs:", n_total_sut_runs, n_experiments, len(suts))
+    logger.info(sep)
+
+    exp_idx = 0
     for _model in models:
         for _temperature in temperatures:
-            logger.info("=== Model: %s  Temperature: %s ===", _model, _temperature)
-            for _sut in suts:
+            exp_idx += 1
+            logger.info("")
+            logger.info(sep)
+            logger.info(
+                "  EXPERIMENT %d/%d — model=%s  temperature=%s",
+                exp_idx, n_experiments, _model, _temperature,
+            )
+            logger.info(sep)
+            for sut_idx, _sut in enumerate(suts, 1):
+                logger.info("")
+                logger.info("  ── SUT %d/%d : %s ──────────────────────────────────────────",
+                            sut_idx, len(suts), _sut)
                 run_crossvalidation(sut=_sut, model=_model, temperature=_temperature)
+                logger.info("  ── SUT %d/%d : %s  DONE ─────────────────────────────────",
+                            sut_idx, len(suts), _sut)
+            logger.info("")
+            logger.info("  EXPERIMENT %d/%d COMPLETE — model=%s  temperature=%s",
+                        exp_idx, n_experiments, _model, _temperature)
+            logger.info(sep)
