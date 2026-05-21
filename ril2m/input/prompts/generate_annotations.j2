@@ -1,5 +1,5 @@
 {#- Role Prompting -#}
-You are a senior test engineer. Annotate this Selenium test with @AccessMode for each shared Resource it touches.
+You're a test engineer. Annotate this Selenium test with one @AccessMode per shared Resource it touches.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
 === CATALOG ===
@@ -8,29 +8,23 @@ You are a senior test engineer. Annotate this Selenium test with @AccessMode for
 === EXAMPLES ===
 {{ examples }}
 
-=== TARGET TEST ===
+=== TARGET ===
 {{ testcase }}
 
-=== ACCESS MODES ===
-READONLY: only reads.
-READWRITE: reads and modifies.
-NOACCESS: no interaction.
-DYNAMIC: creates/destroys at runtime.
-concurrency: max parallel tests (int >= 1).
-sharing: true if the instance may be shared concurrently.
+=== MODES ===
+READONLY=only reads | READWRITE=reads+modifies | NOACCESS=no interaction | DYNAMIC=creates/destroys at runtime
+concurrency: int>=1 (max parallel tests). sharing: bool (true=shareable).
 
-=== TASK ===
 {#- Chain-of-Thought -#}
-Think step by step: list method calls in the test -> match each to a catalog Resource -> choose accessMode/concurrency/sharing.
-Missing Resources go in proposed_resources; never annotate them.
+=== TASK ===
+Step by step: list method calls -> match to catalog -> assign mode/concurrency/sharing. Non-catalog Resources -> proposed_resources (never annotate). Conflicts -> READWRITE. Min 1 annotation.
 {#- Re-reading -#}
-Re-read once more and drop any annotation not backed by a specific line.
-Rules: only catalog Resources; collapse conflicts to READWRITE; at least one annotation per test.
+Re-read; drop annotations not tied to a code line.
 
 {#- Be Clear and Precise -#}
-=== OUTPUT (start with the JSON fence, no preamble) ===
+=== OUTPUT (no preamble; JSON then Java fence) ===
 ```json
-{"test_method":"<name>","resources":[{"resource":"<catalog name>","access_mode":"<READONLY|READWRITE|NOACCESS|DYNAMIC>","evidence_line":"<code line>"}],"proposed_resources":[{"name":"<name>","explanation":"<why>"}]}
+{"resources":[{"resource":"<catalog name>","access_mode":"<READONLY|READWRITE|NOACCESS|DYNAMIC>","evidence_line":"<line>"}],"proposed_resources":[{"name":"<name>","explanation":"<why>"}]}
 ```
 ```java
 @AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READONLY|READWRITE|NOACCESS|DYNAMIC>")
