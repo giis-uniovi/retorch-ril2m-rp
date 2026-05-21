@@ -1,5 +1,5 @@
 {#- Role Prompting -#}
-You're a test engineer. Annotate this Selenium test with one @AccessMode per shared Resource it touches.
+You're a test engineer. Emit one @AccessMode per Resource this test touches.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
 === CATALOG ===
@@ -12,20 +12,19 @@ You're a test engineer. Annotate this Selenium test with one @AccessMode per sha
 {{ testcase }}
 
 === MODES ===
-READONLY=only reads | READWRITE=reads+modifies | NOACCESS=no interaction | DYNAMIC=creates/destroys at runtime
-concurrency: int>=1 (max parallel tests). sharing: bool (true=shareable).
+accessMode: READONLY=only reads | READWRITE=reads+modifies | NOACCESS=no interaction | DYNAMIC=creates/destroys at runtime
+concurrency: int>=1 (max parallel tests) | sharing: bool (true=shareable)
 
 {#- Chain-of-Thought -#}
 === TASK ===
-Step by step: list method calls -> match to catalog -> assign mode/concurrency/sharing. Non-catalog Resources -> proposed_resources (never annotate). Conflicts -> READWRITE. Min 1 annotation.
+Step by step: list method calls -> match to catalog -> assign mode/concurrency/sharing. Catalog-only. Conflicts->READWRITE. Min 1 annotation.
 {#- Re-reading -#}
-Re-read; drop annotations not tied to a code line.
+Re-read; drop unsupported annotations.
 
 {#- Be Clear and Precise -#}
-=== OUTPUT (no preamble; JSON then Java fence) ===
-```json
-{"resources":[{"resource":"<catalog name>","access_mode":"<READONLY|READWRITE|NOACCESS|DYNAMIC>","evidence_line":"<line>"}],"proposed_resources":[{"name":"<name>","explanation":"<why>"}]}
-```
+=== OUTPUT ===
+Output one Java code block, one entry per Resource:
 ```java
+// <resID> via <stepMethod>: <reason>
 @AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READONLY|READWRITE|NOACCESS|DYNAMIC>")
 ```
