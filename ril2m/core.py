@@ -158,6 +158,39 @@ class JavaTestRAG:
         """Retrieves the top_k test cases more similar to the provided one (test_provided)."""
         return self.store.search(test_provided, top_k)
 
+    def build_prompt(
+        self,
+        test_provided: str,
+        top_k: int = TOP_K,
+        resource_file: str | None = None,
+    ) -> str:
+        """Retrieve similar cases and render the Jinja2 prompt without querying the LLM."""
+        similar = self.retrieve(test_provided, top_k)
+
+        context_parts = []
+        for i, tc in enumerate(similar, 1):
+            sim_score = 1 - tc["distance"]  # cosine distance → similarity
+            context_parts.append(
+                f"--- Example {i} (similarity: {sim_score:.2%}) ---\n"
+                f"ID: {tc['id']}\n"
+                f"TestName: {tc['testname']}\n"
+                f"Annotations: {tc['annotations']}\n"
+                f"Code:\n```java\n{tc['code']}\n```"
+            )
+        context = "\n\n".join(context_parts)
+
+        with open(os.path.join(PROMPTS, 'generate_annotations.j2')) as f:
+            template = Template(f.read())
+
+        if resource_file is None:
+            resource_file = os.path.join(CONTEXTS, 'resourcefile.json')
+
+        return template.render(
+            resourcefile=loadfile(resource_file),
+            testcase=test_provided,
+            examples=context,
+        )
+
     def query(
         self,
         test_provided: str,
@@ -184,34 +217,8 @@ class JavaTestRAG:
             Ollama RNG seed for reproducibility.  When ``None`` the OllamaClient
             picks a random seed.
         """
-        similar = self.retrieve(test_provided, top_k)
-
-        context_parts = []
-        for i, tc in enumerate(similar, 1):
-            sim_score = 1 - tc["distance"]  # cosine distance → similarity
-            context_parts.append(
-                f"--- Example {i} (similarity: {sim_score:.2%}) ---\n"
-                f"ID: {tc['id']}\n"
-                f"TestName: {tc['testname']}\n"
-                f"Annotations: {tc['annotations']}\n"
-                f"Code:\n```java\n{tc['code']}\n```"
-            )
-        context = "\n\n".join(context_parts)
-
-        with open(os.path.join(PROMPTS, 'generate_annotations.j2')) as f:
-            template = Template(f.read())
-
-        if resource_file is None:
-            resource_file = os.path.join(CONTEXTS, 'resourcefile.json')
-
-        prompt = template.render(
-            resourcefile=loadfile(resource_file),
-            testcase=test_provided,
-            examples=context,
-        )
-
+        prompt = self.build_prompt(test_provided, top_k, resource_file)
         logger.debug("Prompt sent to LLM:\n%s", prompt)
-
         return self.ollama.chat(prompt, seed=seed)
 
 

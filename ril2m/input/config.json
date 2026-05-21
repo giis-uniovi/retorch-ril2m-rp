@@ -4,7 +4,6 @@
   "base_seed": 42,
   "temperatures": [0.5],
   "models": [
-    "deepseek-v4-flash:cloud",
     "gpt-oss:20b",
     "qwen3-coder:30b",
     "qwen3-coder:latest",

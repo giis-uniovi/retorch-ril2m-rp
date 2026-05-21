@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,18 @@ def _resource_file_for(sut: str, context_dir: str) -> str:
     return fallback
 
 
+def _fmt_duration(seconds: float) -> str:
+    """Format a duration in seconds as a human-readable string (e.g. '1h 23m 45s')."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m}m {s:02d}s"
+    return f"{s}s"
+
+
 def _log_summary(sut: str, folds: list[dict], n_runs: int) -> None:
     sep = "─" * 72
     logger.info(sep)
@@ -98,6 +111,65 @@ def _log_summary(sut: str, folds: list[dict], n_runs: int) -> None:
             fold["fold_id"], fold["excluded_testname"], len(fold.get("runs", [])),
         )
     logger.info(sep)
+
+
+def _eta_str(durations: list[float], items_remaining: int) -> str:
+    """Return a human-readable ETA string from past durations, or empty string if none."""
+    if not durations:
+        return ""
+    avg = sum(durations) / len(durations)
+    return f"  ETA ≈ {_fmt_duration(avg * items_remaining)}"
+
+
+def _execute_run(
+    rag,
+    *,
+    fold_idx: int,
+    n_folds: int,
+    run_idx: int,
+    n_runs: int,
+    seed: int,
+    excluded: dict,
+    top_k: int,
+    resource_file: str,
+    out_dir: str,
+    fold_id: str,
+    run_durations: list[float],
+) -> tuple[str | None, str | None, float]:
+    """Execute one LLM query and save the response to disk.
+
+    Returns ``(response_text, run_filename, elapsed_seconds)``.
+    ``response_text`` and ``run_filename`` are ``None`` on failure.
+    """
+    run_start = time.monotonic()
+    eta = _eta_str(run_durations, n_runs - run_idx + 1)
+    logger.info(
+        "  TC %d/%d  repetition %d/%d — seed=%d — querying LLM...%s",
+        fold_idx, n_folds, run_idx, n_runs, seed, eta,
+    )
+    try:
+        response = rag.query(
+            test_provided=excluded["code"],
+            top_k=top_k,
+            resource_file=resource_file,
+            seed=seed,
+        )
+        elapsed = time.monotonic() - run_start
+        run_filename = f"{fold_id}_run_{run_idx:02d}.txt"
+        with open(os.path.join(out_dir, run_filename), "w", encoding="utf-8") as fh:
+            fh.write(response)
+        logger.info(
+            "  TC %d/%d  repetition %d/%d — done in %s — saved → %s",
+            fold_idx, n_folds, run_idx, n_runs, _fmt_duration(elapsed), run_filename,
+        )
+        return response, run_filename, elapsed
+    except Exception:
+        elapsed = time.monotonic() - run_start
+        logger.exception(
+            "  TC %d/%d  repetition %d/%d — seed=%d — unexpected error, skipping",
+            fold_idx, n_folds, run_idx, n_runs, seed,
+        )
+        return None, None, elapsed
 
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -220,15 +292,21 @@ def run_crossvalidation(
 
     folds: list[dict] = []
     completed_fold_details: list[dict] = []
+    fold_durations: list[float] = []   # elapsed seconds per completed fold
 
     for fold_idx, excluded in enumerate(cases, 1):
+        fold_start = time.monotonic()
         fold_id = excluded["id"]
         testname = excluded["testname"]
         db_path = os.path.join(repo_dir, f"fold_{fold_id}")
         training = [tc for tc in cases if tc["id"] != fold_id]
         meta_path = os.path.join(out_dir, f"{fold_id}.json")
 
-        logger.info("[%s] Fold %d/%d — %s (%s)", sut, fold_idx, n_folds, fold_id, testname)
+        logger.info(
+            "[%s] TC %d/%d — %s (%s)%s",
+            sut, fold_idx, n_folds, fold_id, testname,
+            _eta_str(fold_durations, n_folds - fold_idx + 1) or "  ETA ≈ calculating...",
+        )
 
         # ── 1. Build / reuse ChromaDB (shared across models) ──────────────────
         rag = JavaTestRAG(persist_dir=db_path, model=model, temperature=temperature)
@@ -238,35 +316,38 @@ def run_crossvalidation(
             logger.info("  Embedding: indexing %d training test cases", len(training))
             rag.index_test_cases(training)
 
-        # ── 2. Query Ollama N times — save each run immediately ───────────────
+        # ── 2. Save prompt once per fold (for debugging) ──────────────────────
+        prompt_path = os.path.join(out_dir, f"{fold_id}_prompt.txt")
+        if not os.path.exists(prompt_path):
+            prompt_text = rag.build_prompt(excluded["code"], top_k, resource_file)
+            with open(prompt_path, "w", encoding="utf-8") as f:
+                f.write(prompt_text)
+            logger.info("  Prompt saved → %s", f"{fold_id}_prompt.txt")
+
+        # ── 3. Query Ollama N times — save each run immediately ───────────────
         run_metrics_list: list[dict] = []
+        run_durations: list[float] = []   # elapsed seconds per completed run in this fold
+
         for run_idx in range(1, n_runs + 1):
             seed = base_seed + run_idx - 1      # deterministic: 42, 43, 44, …
-            logger.info("  Run %d/%d — seed=%d — querying LLM...", run_idx, n_runs, seed)
-            try:
-                response = rag.query(
-                    test_provided=excluded["code"],
-                    top_k=top_k,
-                    resource_file=resource_file,
-                    seed=seed,
-                )
+            response, run_filename, run_elapsed = _execute_run(
+                rag,
+                fold_idx=fold_idx, n_folds=n_folds,
+                run_idx=run_idx, n_runs=n_runs,
+                seed=seed, excluded=excluded,
+                top_k=top_k, resource_file=resource_file,
+                out_dir=out_dir, fold_id=fold_id,
+                run_durations=run_durations,
+            )
+            run_durations.append(run_elapsed)
 
-                # Save prediction text immediately
-                run_filename = f"{fold_id}_run_{run_idx:02d}.txt"
-                run_path = os.path.join(out_dir, run_filename)
-                with open(run_path, "w", encoding="utf-8") as f:
-                    f.write(response)
-                logger.info("  Run %d/%d — saved → %s", run_idx, n_runs, run_filename)
-
-                # Compute + append run metrics to CSV immediately
+            if response is not None:
                 run_metrics = append_run_metrics(
                     sut, excluded, run_idx, seed, response, system_resource_ids, metrics_dir,
                     model=model, temperature=temperature,
                 )
                 run_metrics_list.append({"run_id": run_idx, "seed": seed,
                                          "filename": run_filename, **run_metrics})
-
-                # Update fold metadata JSON after every run (partial results survive crashes)
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(
                         {
@@ -277,11 +358,13 @@ def run_crossvalidation(
                         },
                         f, indent=2,
                     )
-            except Exception:
-                logger.exception(
-                    "  Run %d/%d — seed=%d — unexpected error, skipping this run",
-                    run_idx, n_runs, seed,
-                )
+
+        fold_elapsed = time.monotonic() - fold_start
+        fold_durations.append(fold_elapsed)
+        logger.info(
+            "  TC %d/%d — %s complete in %s",
+            fold_idx, n_folds, fold_id, _fmt_duration(fold_elapsed),
+        )
 
         # ── 3. After all runs: fold average → per-experiment CSV + Excel ──────
         fold_detail = append_fold_metrics(
