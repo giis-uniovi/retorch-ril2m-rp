@@ -1,57 +1,37 @@
 {#- Role Prompting -#}
-You are a senior test engineer. Inspect the Selenium test below, identify which Resources it uses, and emit one @AccessMode annotation per Resource.
+You are a senior test engineer. Annotate this Selenium test with @AccessMode for each shared Resource it touches.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
-<resource_catalog>
+=== CATALOG ===
 {{ resourcefile }}
-</resource_catalog>
 
-<annotated_examples>
+=== EXAMPLES ===
 {{ examples }}
-</annotated_examples>
 
-<target_test>
+=== TARGET TEST ===
 {{ testcase }}
-</target_test>
 
+=== ACCESS MODES ===
+READONLY: only reads.
+READWRITE: reads and modifies.
+NOACCESS: no interaction.
+DYNAMIC: creates/destroys at runtime.
+concurrency: max parallel tests (int >= 1).
+sharing: true if the instance may be shared concurrently.
+
+=== TASK ===
 {#- Chain-of-Thought -#}
-## Steps
-1. Trace every method call reachable from the test prefix and body.
-2. Decide whether each call transitively touches a Resource in the catalog.
-3. Classify the interaction — accessMode must be one of: READONLY, READWRITE, NOACCESS, DYNAMIC. Set concurrency (int) and sharing (bool).
-4. If a needed Resource is absent from the catalog, add it to `proposed_resources` — do NOT annotate it.
+Think step by step: list method calls in the test -> match each to a catalog Resource -> choose accessMode/concurrency/sharing.
+Missing Resources go in proposed_resources; never annotate them.
 {#- Re-reading -#}
-5. Re-read the test. Drop any annotation you cannot support with a specific line.
-
-## Constraints
-- Only annotate Resources that appear in the catalog.
-- Collapse conflicting modes on the same Resource to READWRITE.
-- Every test must produce at least one annotation.
+Re-read once more and drop any annotation not backed by a specific line.
+Rules: only catalog Resources; collapse conflicts to READWRITE; at least one annotation per test.
 
 {#- Be Clear and Precise -#}
-## Output
-Return exactly this structure — no extra text before the first fence:
-
+=== OUTPUT (start with the JSON fence, no preamble) ===
 ```json
-{
-  "test_method": "<test name>",
-  "resources": [
-    {
-      "resource": "<name exactly as in catalog>",
-      "access_mode": "READONLY|READWRITE|NOACCESS|DYNAMIC",
-      "teststep": ["<method-1>"],
-      "evidence_line": "<line of code>"
-    }
-  ],
-  "proposed_resources": [
-    {"name": "<name>", "explanation": "<one sentence>"}
-  ]
-}
+{"test_method":"<name>","resources":[{"resource":"<catalog name>","access_mode":"<READONLY|READWRITE|NOACCESS|DYNAMIC>","evidence_line":"<code line>"}],"proposed_resources":[{"name":"<name>","explanation":"<why>"}]}
 ```
-
 ```java
-    @AccessMode(resID="...", concurrency=N, sharing=true|false, accessMode="...")
+@AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READONLY|READWRITE|NOACCESS|DYNAMIC>")
 ```
-
-## Justification
-One sentence per annotation: which line triggers it and why this access mode.
