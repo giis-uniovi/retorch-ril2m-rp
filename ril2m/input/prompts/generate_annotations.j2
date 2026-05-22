@@ -1,43 +1,65 @@
 {#- Role Prompting -#}
-You are a senior test engineer. Inspect this Selenium test and emit one @AccessMode annotation per Resource it touches.
+You are a senior test engineer. Inspect this Selenium test and emit one @AccessMode annotation per Resource it touches. Do not modify or repeat the test code.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
 === CATALOG ===
+The following JSON lists every valid Resource for this system. You may only annotate Resources that appear here.
+
 {{ resourcefile }}
 
 === EXAMPLES ===
+Real test methods with their correct @AccessMode annotations. Use them as a style and reasoning reference.
+
 {{ examples }}
 
 === TARGET ===
+Annotate the test method below.
+
 {{ testcase }}
 
 === MODES ===
-accessMode values:
-  READONLY  = only reads the Resource
-  READWRITE = reads and modifies the Resource
-  NOACCESS  = does not interact
-  DYNAMIC   = creates/destroys the Resource at runtime
-concurrency = int >= 1 (max parallel tests using this Resource)
-sharing     = bool (true if the Resource instance may be shared concurrently)
+accessMode values (use exactly these strings):
+  READ-ONLY  = only reads the Resource
+  WRITE-ONLY = only modifies the Resource
+  READ-WRITE = reads and modifies the Resource
+  NO-ACCESS  = does not interact with the Resource
+  DYNAMIC    = creates or destroys the Resource at runtime
 
-{#- Chain-of-Thought -#}
+concurrency = integer >= 1 (max number of parallel tests that may use this Resource).
+sharing     = true or false (true if the Resource instance may be shared between concurrent tests).
+
+
 === TASK ===
-Reason step by step:
-1. List every method call reachable from the test prefix and body.
-2. Match each call to a Resource in the catalog (skip calls that don't touch any catalog Resource).
-3. For each matched Resource, choose accessMode, concurrency, and sharing from the call's behaviour.
+
+{#- Be Clear and Precise and CoT -#}
+Work through these steps in order. Think step by step before answering.
+
+
+1. Parse the test method. List every method call reachable from the test prefix and the test body.
+2. For each call, decide whether it transitively touches a Resource in the catalog. Note the test step method that performs the access.
+3. Classify the interaction as READ-ONLY, WRITE-ONLY, READ-WRITE, NO-ACCESS, or DYNAMIC, and assign the concurrency and sharing values, based on what the step method does to the Resource.
+4. If the test appears to need a Resource that is NOT in the catalog, do NOT invent an annotation for it. Record it in the Suggested Resources section at the end.
 {#- Re-reading -#}
-4. Re-read the test once more and drop any annotation you cannot tie to a specific line of code.
+5. Self-check: re-read the test once more. Confirm every annotation is supported by a specific line of code. Drop any annotation you cannot justify.
 
 Rules:
-- Only annotate Resources that exist in the catalog.
-- If a Resource has conflicting interactions in the same test, collapse to READWRITE.
+- Only annotate Resources that appear in the catalog.
+- If a Resource has conflicting interactions in the same test, collapse them into READ-WRITE.
 - Every test must produce at least one annotation.
+- Use the exact resID strings from the catalog (case-sensitive, no quoting changes).
 
-{#- Be Clear and Precise -#}
 === OUTPUT ===
-Output one Java code block. For each annotated Resource, write a one-line `//` comment with `<resID> via <stepMethod>: <reason>` immediately followed by its @AccessMode line. Nothing outside the code block.
+Produce three parts in this exact order. Use these exact section labels, in plain text, with no extra commentary before or after them.
+
+Part 1 - Explainability:
+One bullet per annotated Resource, in the same order as the Java block below. Format each bullet as:
+- <resID> via <stepMethod>: <one-sentence reason for the chosen access mode>
+
+Part 2 - Annotations:
+A single fenced Java code block. Inside the fence, output only @AccessMode lines, one per annotated Resource, in the same order as the bullets above. No comments, no other Java syntax.
 ```java
-// <resID> via <stepMethod>: <reason>
-@AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READONLY|READWRITE|NOACCESS|DYNAMIC>")
+@AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READ-ONLY|WRITE-ONLY|READ-WRITE|NO-ACCESS|DYNAMIC>")
 ```
+
+Part 3 - Suggested Resources:
+Resources the test seems to require but are absent from the catalog. Format each bullet as `- <name>: <one-sentence reason>`. If every required Resource is already in the catalog, write exactly `(none)` on a single line.

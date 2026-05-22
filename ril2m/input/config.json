@@ -6,7 +6,6 @@
   "models": [
     "gpt-oss:20b",
     "qwen3-coder:30b",
-    "qwen3-coder:latest",
-    "codellama:7b"
+    "codellama:34b"
   ]
 }

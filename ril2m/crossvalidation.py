@@ -461,24 +461,42 @@ if __name__ == "__main__":
     logger.info(sep)
 
     exp_idx = 0
+    experiment_durations: list[float] = []   # elapsed seconds per completed experiment
     for _model in models:
         for _temperature in temperatures:
             exp_idx += 1
+            exp_start = time.monotonic()
+            exp_eta = _eta_str(experiment_durations, n_experiments - exp_idx + 1) \
+                or "  ETA ≈ calculating..."
             logger.info("")
             logger.info(sep)
             logger.info(
-                "  EXPERIMENT %d/%d — model=%s  temperature=%s",
-                exp_idx, n_experiments, _model, _temperature,
+                "  EXPERIMENT %d/%d — model=%s  temperature=%s%s",
+                exp_idx, n_experiments, _model, _temperature, exp_eta,
             )
             logger.info(sep)
+
+            sut_durations: list[float] = []   # elapsed seconds per completed SUT in this experiment
             for sut_idx, _sut in enumerate(suts, 1):
+                sut_start = time.monotonic()
+                sut_eta = _eta_str(sut_durations, len(suts) - sut_idx + 1) \
+                    or "  ETA ≈ calculating..."
                 logger.info("")
-                logger.info("  ── SUT %d/%d : %s ──────────────────────────────────────────",
-                            sut_idx, len(suts), _sut)
+                logger.info("  ── SUT %d/%d : %s%s",
+                            sut_idx, len(suts), _sut, sut_eta)
                 run_crossvalidation(sut=_sut, model=_model, temperature=_temperature)
-                logger.info("  ── SUT %d/%d : %s  DONE ─────────────────────────────────",
-                            sut_idx, len(suts), _sut)
+                sut_elapsed = time.monotonic() - sut_start
+                sut_durations.append(sut_elapsed)
+                logger.info("  ── SUT %d/%d : %s  DONE in %s",
+                            sut_idx, len(suts), _sut, _fmt_duration(sut_elapsed))
+
+            exp_elapsed = time.monotonic() - exp_start
+            experiment_durations.append(exp_elapsed)
+            remaining_exp_eta = _eta_str(experiment_durations, n_experiments - exp_idx) \
+                or "  (last experiment)"
             logger.info("")
-            logger.info("  EXPERIMENT %d/%d COMPLETE — model=%s  temperature=%s",
-                        exp_idx, n_experiments, _model, _temperature)
+            logger.info("  EXPERIMENT %d/%d COMPLETE in %s — model=%s  temperature=%s",
+                        exp_idx, n_experiments, _fmt_duration(exp_elapsed),
+                        _model, _temperature)
+            logger.info("  Remaining experiments:%s", remaining_exp_eta)
             logger.info(sep)

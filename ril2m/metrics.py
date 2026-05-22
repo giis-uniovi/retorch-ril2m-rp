@@ -65,9 +65,20 @@ _GLOBAL_SUMMARY_FIELDS = [
     "M7_avg_fn", "M8_f1", "M8_f1_hall",
 ]
 
-_VALID_ACCESS_MODES = {"READONLY", "READWRITE", "NOACCESS", "DYNAMIC"}
+_VALID_ACCESS_MODES = {"READONLY", "READWRITE", "WRITEONLY", "NOACCESS", "DYNAMIC"}
 _ACCESS_MODE_RE = re.compile(r"@AccessMode\s*\(([^)]*)\)", re.DOTALL)
 _PARAM_RE = re.compile(r'(\w+)\s*=\s*(?:"([^"]*)"|(\d+)|(true|false))')
+
+
+def _normalize_access_mode(s: str | None) -> str | None:
+    """Canonicalise LLM-emitted accessMode strings to compare against _VALID_ACCESS_MODES.
+
+    Strips hyphens, underscores and whitespace, then uppercases.  Lets the
+    parser accept all of: READ-ONLY, read_only, READONLY, "Read Only", etc.
+    """
+    if s is None:
+        return None
+    return s.replace("-", "").replace("_", "").replace(" ", "").upper() or None
 
 # Fixed column sets (n_runs-independent)
 _FOLD_CSV_FIELDS = [
@@ -114,10 +125,12 @@ def parse_access_modes(text: str) -> list[dict]:
                 "parse_access_modes: non-integer concurrency value %r — kept in concurrency_raw",
                 concurrency_raw,
             )
+        raw_mode = params.get("accessMode")
         results.append(
             {
                 "resID": params.get("resID"),
-                "accessMode": params.get("accessMode"),
+                "accessMode": _normalize_access_mode(raw_mode),
+                "accessMode_raw": raw_mode,
                 "concurrency": concurrency,
                 "concurrency_raw": concurrency_raw,
                 "sharing": params.get("sharing") == "true" if "sharing" in params else None,
