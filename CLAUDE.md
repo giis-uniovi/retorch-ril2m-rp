@@ -165,11 +165,13 @@ the last completed run are preserved in CSV and Excel.
 ### `ril2m/metrics.py`
 Computes M1-M8 metrics across all SUTs and writes output files.
 
+Strict hierarchy by construction — **M3 ≤ M2 ≤ M1**. M4-M8 (TP/TN/FP/FN/F1) are zero on runs that fail M1 (a non-compiling annotation block has no meaningful overlap with ground truth).
+
 | Metric | Description |
 |--------|-------------|
 | M1 Correct@N | Proportion of runs where all predicted `@AccessMode` syntactically valid |
-| M2 Pass@N | Proportion of runs where all predicted `resID`s existing in SystemResources |
-| M3 Acc@N | Proportion of runs where predicted resource set exactly matches ground truth |
+| M2 Pass@N | M1-correct AND all predicted `resID`s exist in SystemResources |
+| M3 Acc@N | M2-pass AND predicted resource set exactly matches ground truth |
 | M4 Avg TP | Average resources correctly tagged |
 | M5 Avg TN | Average resources correctly NOT tagged |
 | M6 Avg FP | Average resources incorrectly tagged (M6.1 real FP + M6.2 hallucinations) |

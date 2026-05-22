@@ -1,5 +1,5 @@
 {#- Role Prompting -#}
-You're a test engineer. Emit one @AccessMode per Resource this test touches.
+You are a senior test engineer. Inspect this Selenium test and emit one @AccessMode annotation per Resource it touches.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
 === CATALOG ===
@@ -12,18 +12,31 @@ You're a test engineer. Emit one @AccessMode per Resource this test touches.
 {{ testcase }}
 
 === MODES ===
-accessMode: READONLY=only reads | READWRITE=reads+modifies | NOACCESS=no interaction | DYNAMIC=creates/destroys at runtime
-concurrency: int>=1 (max parallel tests) | sharing: bool (true=shareable)
+accessMode values:
+  READONLY  = only reads the Resource
+  READWRITE = reads and modifies the Resource
+  NOACCESS  = does not interact
+  DYNAMIC   = creates/destroys the Resource at runtime
+concurrency = int >= 1 (max parallel tests using this Resource)
+sharing     = bool (true if the Resource instance may be shared concurrently)
 
 {#- Chain-of-Thought -#}
 === TASK ===
-Step by step: list method calls -> match to catalog -> assign mode/concurrency/sharing. Catalog-only. Conflicts->READWRITE. Min 1 annotation.
+Reason step by step:
+1. List every method call reachable from the test prefix and body.
+2. Match each call to a Resource in the catalog (skip calls that don't touch any catalog Resource).
+3. For each matched Resource, choose accessMode, concurrency, and sharing from the call's behaviour.
 {#- Re-reading -#}
-Re-read; drop unsupported annotations.
+4. Re-read the test once more and drop any annotation you cannot tie to a specific line of code.
+
+Rules:
+- Only annotate Resources that exist in the catalog.
+- If a Resource has conflicting interactions in the same test, collapse to READWRITE.
+- Every test must produce at least one annotation.
 
 {#- Be Clear and Precise -#}
 === OUTPUT ===
-Output one Java code block, one entry per Resource:
+Output one Java code block. For each annotated Resource, write a one-line `//` comment with `<resID> via <stepMethod>: <reason>` immediately followed by its @AccessMode line. Nothing outside the code block.
 ```java
 // <resID> via <stepMethod>: <reason>
 @AccessMode(resID="<resource>", concurrency=<N>, sharing=<true|false>, accessMode="<READONLY|READWRITE|NOACCESS|DYNAMIC>")

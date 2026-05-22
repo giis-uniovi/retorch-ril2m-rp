@@ -8,14 +8,22 @@ Aggregation levels
   fold     – average of all runs for one held-out test case.
   SUT      – average of all fold averages for one repository.
 
-Metrics (M1-M8) computed per fold (averaged across runs) and per SUT:
+Metrics (M1-M8) computed per fold (averaged across runs) and per SUT.
+
+Strict hierarchy (by construction, M3 <= M2 <= M1):
 
   M1  Correct@N  – proportion of runs where every predicted @AccessMode is
                    syntactically valid (required fields present, valid accessMode value).
-  M2  Pass@N     – proportion of runs where every predicted resID exists in
-                   SystemResources (no compilation error).
-  M3  Acc@N      – proportion of runs where the predicted resource set exactly
-                   matches the ground-truth resource set.
+                   Failing M1 means the annotated test would not even compile.
+  M2  Pass@N     – proportion of runs that are M1-correct AND every predicted
+                   resID exists in SystemResources (no broken references).
+  M3  Acc@N      – proportion of runs that are M2-pass AND whose predicted
+                   resource set exactly matches the ground-truth set.
+
+  M4-M8 are evaluated only on M1-correct runs; if M1 fails the run contributes
+  zeros to TP/TN/FP/FN/F1 because measuring overlap on a non-compiling
+  annotation block is not meaningful.
+
   M4  Avg TP     – average resources correctly tagged (across runs and folds).
   M5  Avg TN     – average resources correctly NOT tagged.
   M6  Avg FP     – average resources incorrectly tagged:
@@ -156,39 +164,53 @@ def compute_fold_metrics(
     gt_res: set[str] = {a["resID"] for a in gt_anns if a.get("resID")}
     pred_res: set[str] = {a["resID"] for a in pred_anns if a.get("resID")}
 
+    # M1 Correct — every predicted annotation is syntactically valid.
     correct = bool(pred_anns) and all(_is_syntactically_correct(a) for a in pred_anns)
-    valid = bool(pred_anns) and all(
+
+    # M2 Pass — strict superset of M1: must compile AND every resID in catalog.
+    # By construction Pass <= Correct (cannot exceed it).
+    all_resids_in_catalog = bool(pred_anns) and all(
         a["resID"] in system_resource_ids for a in pred_anns if a.get("resID")
     )
-    accurate = pred_res == gt_res
+    valid = correct and all_resids_in_catalog
 
-    tp = gt_res & pred_res
-    fn = gt_res - pred_res
-    fp = pred_res - gt_res
-    tn = (system_resource_ids - gt_res) - pred_res
-    fp_real = fp & system_resource_ids
-    fp_hall = fp - system_resource_ids
+    # M3 Acc — exact set match implies Pass (and therefore Correct).
+    accurate = valid and (pred_res == gt_res)
 
-    tp_n, fp_n, fn_n, fp_hall_n = len(tp), len(fp), len(fn), len(fp_hall)
+    # M4-M8 (TP/TN/FP/FN/F1) only make sense when the prediction compiles.
+    # If not correct, overlap metrics are zero — the test would not even build.
+    if correct:
+        tp = gt_res & pred_res
+        fn = gt_res - pred_res
+        fp = pred_res - gt_res
+        tn = (system_resource_ids - gt_res) - pred_res
+        fp_real = fp & system_resource_ids
+        fp_hall = fp - system_resource_ids
 
-    precision = tp_n / (tp_n + fp_n) if (tp_n + fp_n) > 0 else 0.0
-    recall = tp_n / (tp_n + fn_n) if (tp_n + fn_n) > 0 else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    precision_hall = tp_n / (tp_n + fp_hall_n) if (tp_n + fp_hall_n) > 0 else 0.0
-    f1_hall = (
-        2 * precision_hall * recall / (precision_hall + recall)
-        if (precision_hall + recall) > 0
-        else 0.0
-    )
+        tp_n, fp_n, fn_n, fp_hall_n = len(tp), len(fp), len(fn), len(fp_hall)
+        tn_n, fp_real_n = len(tn), len(fp_real)
+
+        precision = tp_n / (tp_n + fp_n) if (tp_n + fp_n) > 0 else 0.0
+        recall = tp_n / (tp_n + fn_n) if (tp_n + fn_n) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        precision_hall = tp_n / (tp_n + fp_hall_n) if (tp_n + fp_hall_n) > 0 else 0.0
+        f1_hall = (
+            2 * precision_hall * recall / (precision_hall + recall)
+            if (precision_hall + recall) > 0
+            else 0.0
+        )
+    else:
+        tp_n = tn_n = fp_n = fp_real_n = fp_hall_n = fn_n = 0
+        precision = recall = f1 = precision_hall = f1_hall = 0.0
 
     return {
         "correct": correct,
         "valid": valid,
         "accurate": accurate,
         "tp": tp_n,
-        "tn": len(tn),
+        "tn": tn_n,
         "fp": fp_n,
-        "fp_real": len(fp_real),
+        "fp_real": fp_real_n,
         "fp_hall": fp_hall_n,
         "fn": fn_n,
         "precision": precision,

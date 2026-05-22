@@ -1,5 +1,5 @@
 {
-  "n_runs": 10,
+  "n_runs": 3,
   "top_k": 5,
   "base_seed": 42,
   "temperatures": [0.5],
@@ -7,6 +7,6 @@
     "gpt-oss:20b",
     "qwen3-coder:30b",
     "qwen3-coder:latest",
-    "codellama:34b"
+    "codellama:7b"
   ]
 }
