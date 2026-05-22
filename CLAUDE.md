@@ -171,7 +171,7 @@ Strict hierarchy by construction — **M3 ≤ M2 ≤ M1**. M4-M8 (TP/TN/FP/FN/F1
 |--------|-------------|
 | M1 Correct@N | Proportion of runs where all predicted `@AccessMode` syntactically valid |
 | M2 Pass@N | M1-correct AND all predicted `resID`s exist in SystemResources |
-| M3 Acc@N | M2-pass AND predicted resource set exactly matches ground truth |
+| M3 Acc@N | Fraction of GT annotations whose 4 fields (resID, accessMode, concurrency, sharing) are exactly replicated in the prediction; gated on M2 Pass (0 otherwise). Continuous in [0, 1]. |
 | M4 Avg TP | Average resources correctly tagged |
 | M5 Avg TN | Average resources correctly NOT tagged |
 | M6 Avg FP | Average resources incorrectly tagged (M6.1 real FP + M6.2 hallucinations) |

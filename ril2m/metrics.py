@@ -17,8 +17,11 @@ Strict hierarchy (by construction, M3 <= M2 <= M1):
                    Failing M1 means the annotated test would not even compile.
   M2  Pass@N     – proportion of runs that are M1-correct AND every predicted
                    resID exists in SystemResources (no broken references).
-  M3  Acc@N      – proportion of runs that are M2-pass AND whose predicted
-                   resource set exactly matches the ground-truth set.
+  M3  Acc@N      – fraction (per run) of ground-truth annotations whose four
+                   fields (resID, accessMode, concurrency, sharing) are
+                   exactly replicated in the prediction.  Gated on M2 Pass —
+                   0 when M2 fails.  Continuous in [0, 1] (e.g. 0.5 = half of
+                   GT annotations have an identical predicted twin).
 
   M4-M8 are evaluated only on M1-correct runs; if M1 fails the run contributes
   zeros to TP/TN/FP/FN/F1 because measuring overlap on a non-compiling
@@ -150,6 +153,84 @@ def _is_syntactically_correct(ann: dict) -> bool:
     )
 
 
+def _annotation_fields_match(pred: dict, gt: dict) -> bool:
+    """Return True iff resID, accessMode, concurrency, and sharing all match.
+
+    All four fields are compared as parsed by ``parse_access_modes`` — accessMode
+    is normalised so ``READ-ONLY`` and ``READONLY`` compare equal.
+    """
+    return (
+        pred.get("resID") == gt.get("resID")
+        and pred.get("accessMode") == gt.get("accessMode")
+        and pred.get("concurrency") == gt.get("concurrency")
+        and pred.get("sharing") == gt.get("sharing")
+    )
+
+
+def _acc_field_match_rate(pred_anns: list[dict], gt_anns: list[dict]) -> float:
+    """Fraction of GT annotations whose 4 fields are exactly replicated in pred.
+
+    See ``_annotation_fields_match``.  Returns 0.0 if GT has no annotations.
+    """
+    gt_by_resid = {a["resID"]: a for a in gt_anns if a.get("resID")}
+    if not gt_by_resid:
+        return 0.0
+    pred_by_resid = {a["resID"]: a for a in pred_anns if a.get("resID")}
+    matches = sum(
+        1
+        for resid, gt_ann in gt_by_resid.items()
+        if _annotation_fields_match(pred_by_resid.get(resid, {}), gt_ann)
+    )
+    return matches / len(gt_by_resid)
+
+
+def _safe_div(num: float, den: float) -> float:
+    return num / den if den > 0 else 0.0
+
+
+def _compute_overlap_metrics(
+    gt_res: set[str],
+    pred_res: set[str],
+    system_resource_ids: set[str],
+) -> dict:
+    """Compute M4-M8 (TP/TN/FP/FN + precision/recall/f1) over resID sets."""
+    tp = gt_res & pred_res
+    fn = gt_res - pred_res
+    fp = pred_res - gt_res
+    tn = (system_resource_ids - gt_res) - pred_res
+    fp_real = fp & system_resource_ids
+    fp_hall = fp - system_resource_ids
+
+    tp_n, fp_n, fn_n, fp_hall_n = len(tp), len(fp), len(fn), len(fp_hall)
+
+    precision = _safe_div(tp_n, tp_n + fp_n)
+    recall = _safe_div(tp_n, tp_n + fn_n)
+    f1 = _safe_div(2 * precision * recall, precision + recall)
+    precision_hall = _safe_div(tp_n, tp_n + fp_hall_n)
+    f1_hall = _safe_div(2 * precision_hall * recall, precision_hall + recall)
+
+    return {
+        "tp": tp_n,
+        "tn": len(tn),
+        "fp": fp_n,
+        "fp_real": len(fp_real),
+        "fp_hall": fp_hall_n,
+        "fn": fn_n,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "precision_hall": precision_hall,
+        "f1_hall": f1_hall,
+    }
+
+
+_ZERO_OVERLAP = {
+    "tp": 0, "tn": 0, "fp": 0, "fp_real": 0, "fp_hall": 0, "fn": 0,
+    "precision": 0.0, "recall": 0.0, "f1": 0.0,
+    "precision_hall": 0.0, "f1_hall": 0.0,
+}
+
+
 def compute_fold_metrics(
     gt_tc: dict,
     prediction_text: str,
@@ -173,7 +254,6 @@ def compute_fold_metrics(
     """
     gt_anns = parse_access_modes(gt_tc.get("annotations", ""))
     pred_anns = parse_access_modes(prediction_text)
-
     gt_res: set[str] = {a["resID"] for a in gt_anns if a.get("resID")}
     pred_res: set[str] = {a["resID"] for a in pred_anns if a.get("resID")}
 
@@ -181,56 +261,23 @@ def compute_fold_metrics(
     correct = bool(pred_anns) and all(_is_syntactically_correct(a) for a in pred_anns)
 
     # M2 Pass — strict superset of M1: must compile AND every resID in catalog.
-    # By construction Pass <= Correct (cannot exceed it).
-    all_resids_in_catalog = bool(pred_anns) and all(
+    valid = correct and all(
         a["resID"] in system_resource_ids for a in pred_anns if a.get("resID")
     )
-    valid = correct and all_resids_in_catalog
 
-    # M3 Acc — exact set match implies Pass (and therefore Correct).
-    accurate = valid and (pred_res == gt_res)
+    # M3 Acc — gated on Pass.  When gated open, score is the fraction of GT
+    # annotations whose four fields are exactly replicated in the prediction.
+    accurate = _acc_field_match_rate(pred_anns, gt_anns) if valid else 0.0
 
-    # M4-M8 (TP/TN/FP/FN/F1) only make sense when the prediction compiles.
-    # If not correct, overlap metrics are zero — the test would not even build.
-    if correct:
-        tp = gt_res & pred_res
-        fn = gt_res - pred_res
-        fp = pred_res - gt_res
-        tn = (system_resource_ids - gt_res) - pred_res
-        fp_real = fp & system_resource_ids
-        fp_hall = fp - system_resource_ids
-
-        tp_n, fp_n, fn_n, fp_hall_n = len(tp), len(fp), len(fn), len(fp_hall)
-        tn_n, fp_real_n = len(tn), len(fp_real)
-
-        precision = tp_n / (tp_n + fp_n) if (tp_n + fp_n) > 0 else 0.0
-        recall = tp_n / (tp_n + fn_n) if (tp_n + fn_n) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        precision_hall = tp_n / (tp_n + fp_hall_n) if (tp_n + fp_hall_n) > 0 else 0.0
-        f1_hall = (
-            2 * precision_hall * recall / (precision_hall + recall)
-            if (precision_hall + recall) > 0
-            else 0.0
-        )
-    else:
-        tp_n = tn_n = fp_n = fp_real_n = fp_hall_n = fn_n = 0
-        precision = recall = f1 = precision_hall = f1_hall = 0.0
+    # M4-M8 only make sense when the prediction compiles.
+    overlap = _compute_overlap_metrics(gt_res, pred_res, system_resource_ids) \
+        if correct else _ZERO_OVERLAP
 
     return {
         "correct": correct,
         "valid": valid,
         "accurate": accurate,
-        "tp": tp_n,
-        "tn": tn_n,
-        "fp": fp_n,
-        "fp_real": fp_real_n,
-        "fp_hall": fp_hall_n,
-        "fn": fn_n,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "precision_hall": precision_hall,
-        "f1_hall": f1_hall,
+        **overlap,
     }
 
 
