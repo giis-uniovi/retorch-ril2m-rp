@@ -2,7 +2,7 @@
 You are a senior test engineer. Inspect this Selenium test and emit one @AccessMode annotation per Resource it touches. Do not modify or repeat the test code.
 
 {#- Few-Shot/In-Context Learning and Use of delimiters -#}
-=== CATALOG ===
+=== RESOURCE LIST ===
 The following JSON lists every valid Resource for this system. You may only annotate Resources that appear here.
 
 {{ resourcefile }}
@@ -36,17 +36,17 @@ Work through these steps in order. Think step by step before answering.
 
 
 1. Parse the test method. List every method call reachable from the test prefix and the test body.
-2. For each call, decide whether it transitively touches a Resource in the catalog. Note the test step method that performs the access.
+2. For each call, decide whether it transitively touches a Resource in the Resource list. Note the test step method that performs the access.
 3. Classify the interaction as READ-ONLY, WRITE-ONLY, READ-WRITE, NO-ACCESS, or DYNAMIC, and assign the concurrency and sharing values, based on what the step method does to the Resource.
-4. If the test appears to need a Resource that is NOT in the catalog, do NOT invent an annotation for it. Record it in the Suggested Resources section at the end.
+4. If the test appears to need a Resource that is NOT in the Resource list, do NOT invent an annotation for it. Record it in the Suggested Resources section at the end.
 {#- Re-reading -#}
 5. Self-check: re-read the test once more. Confirm every annotation is supported by a specific line of code. Drop any annotation you cannot justify.
 
 Rules:
-- Only annotate Resources that appear in the catalog.
+- Only annotate Resources that appear in the Resource list.
 - If a Resource has conflicting interactions in the same test, collapse them into READ-WRITE.
 - Every test must produce at least one annotation.
-- Use the exact resID strings from the catalog (case-sensitive, no quoting changes).
+- Use the exact resID strings from the Resource list (case-sensitive, no quoting changes).
 
 === OUTPUT ===
 Produce three parts in this exact order. Use these exact section labels, in plain text, with no extra commentary before or after them.
@@ -62,4 +62,4 @@ A single fenced Java code block. Inside the fence, output only @AccessMode lines
 ```
 
 Part 3 - Suggested Resources:
-Resources the test seems to require but are absent from the catalog. Format each bullet as `- <name>: <one-sentence reason>`. If every required Resource is already in the catalog, write exactly `(none)` on a single line.
+Resources the test seems to require but are absent from the Resource list. Format each bullet as `- <name>: <one-sentence reason>`. If every required Resource is already in the Resource list, write exactly `(none)` on a single line.
