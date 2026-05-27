@@ -10,6 +10,7 @@ name = "retorch-ril2m-rp"
 version = "2024.0.0"
 dependencies = [
     "ollama == 0.6.2", # Required to interact with the models
+    "openai>=1.0.0",   # Required for OpenAI and OpenRouter providers
     "setuptools==82.0.1",
     "pytest==9.0.3",
     "pytest-cov==7.1.0",

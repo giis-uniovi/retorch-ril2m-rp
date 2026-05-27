@@ -39,6 +39,7 @@ _CONFIG_DEFAULTS = {
     "base_seed": 42,
     "temperatures": [0.5],
     "models": ["gpt-oss:20b"],
+    "provider": "ollama",
 }
 
 
@@ -193,18 +194,20 @@ def run_crossvalidation(
     top_k: int | None = None,
     base_seed: int | None = None,
     temperature: float | None = None,
+    provider: str | None = None,
 ) -> list[dict]:
     """
     Run leave-one-out cross-validation for one SUT with one LLM model.
 
     ChromaDB fold databases are **shared across models** because embeddings are
     produced by a fixed embedding model (``EMBED_MODEL``), not by the generation
-    LLM.  Rebuilding them for every model would be wasteful.
+    LLM.  Rebuilding them for every model/provider would be wasteful.
 
     Parameters
     ----------
     sut:         Short repository name (e.g. ``"fullteaching"``).
-    model:       Ollama model tag for generation (e.g. ``"gpt-oss:20b"``).
+    model:       Model tag for generation (e.g. ``"gpt-oss:20b"`` for Ollama,
+                 ``"gpt-4o"`` for OpenAI, ``"anthropic/claude-opus-4"`` for OpenRouter).
                  Defaults to first entry in ``config.json → models``.
     context_dir: Directory containing context JSONs.
     chroma_base: Root directory for shared ChromaDB fold databases.
@@ -213,6 +216,8 @@ def run_crossvalidation(
     top_k:       Similar examples in the LLM prompt. Defaults to ``config.json`` value.
     base_seed:   Seed for run 1; run i uses ``base_seed + i − 1``.
     temperature: Sampling temperature. Defaults to first entry in ``config.json → temperatures``.
+    provider:    LLM provider — ``"ollama"``, ``"openai"``, or ``"openrouter"``.
+                 Defaults to ``config.json → provider``.
 
     Returns
     -------
@@ -242,6 +247,8 @@ def run_crossvalidation(
         model = cfg["models"][0]
     if temperature is None:
         temperature = cfg["temperatures"][0]
+    if provider is None:
+        provider = cfg.get("provider", "ollama")
 
     if context_dir is None:
         context_dir = CONTEXTS
@@ -285,7 +292,7 @@ def run_crossvalidation(
     if not os.path.exists(descriptor_path):
         with open(descriptor_path, "w", encoding="utf-8") as f:
             json.dump(
-                {"model": model, "model_name": model_name,
+                {"model": model, "model_name": model_name, "provider": provider,
                  "temperature": temperature, "experiment_tag": experiment_tag},
                 f, indent=2,
             )
@@ -309,7 +316,7 @@ def run_crossvalidation(
         )
 
         # ── 1. Build / reuse ChromaDB (shared across models) ──────────────────
-        rag = JavaTestRAG(persist_dir=db_path, model=model, temperature=temperature)
+        rag = JavaTestRAG(persist_dir=db_path, model=model, temperature=temperature, provider=provider)
         if rag.store.count() > 0:
             logger.info("  Embedding: already indexed (%d docs), skipping", rag.store.count())
         else:
@@ -439,6 +446,7 @@ if __name__ == "__main__":
     models = sorted(cfg["models"], key=_model_param_count)
     temperatures = cfg["temperatures"]
     n_runs = cfg["n_runs"]
+    provider = cfg.get("provider", "ollama")
 
     n_experiments = len(models) * len(temperatures)
     n_total_sut_runs = n_experiments * len(suts)
@@ -447,6 +455,7 @@ if __name__ == "__main__":
     logger.info(sep)
     logger.info("  EXPERIMENT PLAN")
     logger.info(sep)
+    logger.info("  %-24s %s", "Provider:", provider)
     logger.info("  %-24s %s", "Models (least→most):", " | ".join(
         f"{m} (~{_model_param_count(m):.0f}B)" if _model_param_count(m) != float('inf') else m
         for m in models
@@ -484,7 +493,7 @@ if __name__ == "__main__":
                 logger.info("")
                 logger.info("  ── SUT %d/%d : %s%s",
                             sut_idx, len(suts), _sut, sut_eta)
-                run_crossvalidation(sut=_sut, model=_model, temperature=_temperature)
+                run_crossvalidation(sut=_sut, model=_model, temperature=_temperature, provider=provider)
                 sut_elapsed = time.monotonic() - sut_start
                 sut_durations.append(sut_elapsed)
                 logger.info("  ── SUT %d/%d : %s  DONE in %s",

@@ -9,7 +9,8 @@ Generation (RAG) and an LLM.
 Given a new, unannotated Java test method the system:
 1. Retrieves the most similar already-annotated test cases from a vector store (ChromaDB).
 2. Builds a context-enriched prompt using a Jinja2 template.
-3. Queries a local LLM (via Ollama) to suggest the missing `@AccessMode` annotations.
+3. Queries an LLM — via **Ollama** (local), **OpenAI**, or **OpenRouter** — to suggest the
+   missing `@AccessMode` annotations.
 
 ## Pipeline overview
 
@@ -41,10 +42,12 @@ retorch-ril2m-rp/
 │   │   ├── code_utils.py              # extract_snippets
 │   │   ├── excel_utils.py             # write_metrics_excel, global Excel helpers
 │   │   ├── logging_config.py          # Structured logging setup
-│   │   └── ollamaClient.py            # Ollama HTTP client wrapper
+│   │   ├── llmClient.py               # Abstract LLMClient base class
+│   │   ├── ollamaClient.py            # OllamaClient (chat + embed via local Ollama)
+│   │   └── openaiClient.py            # OpenAICompatibleClient (OpenAI and OpenRouter)
 │   └── input/
 │       ├── fetch_testcases.py         # Fetches repos and writes per-repo JSONs
-│       ├── config.json                # Experiment parameters (n_runs, top_k, base_seed)
+│       ├── config.json                # Experiment parameters (provider, n_runs, top_k, base_seed, models, temperatures)
 │       ├── context/
 │       │   ├── ragtestcases_<repo>.json    # Auto-generated test cases per SUT
 │       │   ├── systemresources_<repo>.json # Auto-generated resource definitions per SUT
@@ -54,7 +57,7 @@ retorch-ril2m-rp/
 ├── outputs/
 │   ├── crossval/
 │   │   └── <experiment_tag>/              # e.g. gpt-oss-20b_t0.5
-│   │       ├── .experiment.json           # model, temperature, experiment_tag
+│   │       ├── .experiment.json           # model, provider, temperature, experiment_tag
 │   │       └── <sut>/
 │   │           ├── TC-001_run_01.txt      # LLM prediction (saved immediately per run)
 │   │           ├── TC-001.json            # Fold metadata (updated after every run)
@@ -119,16 +122,32 @@ file fetches are unlimited and do not count against this quota).
 Single file controlling all experiment parameters:
 
 ```json
-{ "n_runs": 10, "top_k": 5, "base_seed": 42 }
+{
+  "provider": "ollama",
+  "n_runs": 3,
+  "top_k": 5,
+  "base_seed": 42,
+  "temperatures": [0.5],
+  "models": ["gpt-oss:20b", "qwen3-coder:30b", "codellama:34b"]
+}
 ```
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `provider` | `"ollama"` | LLM provider for chat — `"ollama"`, `"openai"`, or `"openrouter"` |
 | `n_runs` | 10 | LLM queries per fold |
 | `top_k` | 5 | Similar examples included in the RAG prompt |
 | `base_seed` | 42 | Seed for run 1; run *i* uses `base_seed + i − 1` (deterministic) |
-| `models` | `["gpt-oss:20b"]` | Ollama model tags to evaluate; crossvalidation iterates over all |
+| `models` | `["gpt-oss:20b"]` | Model tags to evaluate; crossvalidation iterates over all. Use Ollama tags for `"ollama"`, OpenAI/OpenRouter model IDs for the other providers. |
 | `temperatures` | `[0.5]` | Sampling temperatures to evaluate; crossvalidation iterates over all |
+
+**Provider-specific model name examples:**
+
+| Provider | Example model values |
+|----------|---------------------|
+| `"ollama"` | `"gpt-oss:20b"`, `"qwen3-coder:30b"`, `"codellama:34b"` |
+| `"openai"` | `"gpt-4o"`, `"gpt-4o-mini"`, `"o3-mini"` |
+| `"openrouter"` | `"anthropic/claude-opus-4"`, `"google/gemini-2.0-flash-001"` |
 
 ### `ril2m/crossvalidation.py`
 Runs the full leave-one-out cross-validation loop for all SUTs.
@@ -137,15 +156,16 @@ Runs the full leave-one-out cross-validation loop for all SUTs.
 
 | Symbol | Purpose |
 |--------|---------|
-| `load_config()` | Load `n_runs`, `top_k`, `base_seed`, `models`, `temperatures` from `ril2m/input/config.json` |
-| `run_crossvalidation(sut, model, context_dir, chroma_base, output_base, n_runs, top_k, base_seed, temperature)` | Full build + query loop for one model×temperature; returns list of fold-info dicts |
+| `load_config()` | Load `provider`, `n_runs`, `top_k`, `base_seed`, `models`, `temperatures` from `ril2m/input/config.json` |
+| `run_crossvalidation(sut, model, context_dir, chroma_base, output_base, n_runs, top_k, base_seed, temperature, provider)` | Full build + query loop for one model×temperature×provider; returns list of fold-info dicts |
 | `_model_param_count(model_tag)` | Parse parameter count from a model tag (e.g. `llama3:7b` → 7.0) for ordering |
 | `load_manifest(sut, chroma_base)` | Load the fold manifest for a SUT |
 
 **How it works (per fold):**
 1. Load `ragtestcases_<sut>.json` and `systemresources_<sut>.json`.
 2. For each test case `TC-k`: create a `JavaTestRAG` backed by `chroma_db/<sut>/fold_TC-k/`
-   (shared across models — same embeddings) and index the N-1 training cases (skipped if already indexed).
+   (shared across models and providers — same embeddings) and index the N-1 training cases
+   (skipped if already indexed).
 3. Query the LLM `n_runs` times — each run uses seed `base_seed + run_idx - 1`.
    **Each run is wrapped in try/except — a failed run logs a full traceback and is skipped; the experiment continues.**
 4. Save each run immediately to `outputs/crossval/<experiment>/<sut>/TC-k_run_NN.txt`.
@@ -155,7 +175,7 @@ Runs the full leave-one-out cross-validation loop for all SUTs.
 
 The `__main__` block:
 - **Sorts models by parameter count (ascending)** so less powerful models (more prone to hallucinations) run first.
-- Logs a full **experiment plan summary table** at startup (models, temperatures, SUTs, runs/fold, total experiments).
+- Logs a full **experiment plan summary table** at startup (provider, models, temperatures, SUTs, runs/fold, total experiments).
 - Logs clear banners on each **model/temperature change** and each **SUT change**, with progress counters (e.g. `SUT 2/3`, `EXPERIMENT 2/4`).
 - Iterates `models × temperatures × suts` from config so the full grid runs unattended.
 
@@ -214,11 +234,13 @@ Split by responsibility:
 
 | Module | Contents |
 |--------|----------|
+| `llmClient.py` | `LLMClient` — abstract base class with a single abstract `chat(prompt, seed)` method |
+| `ollamaClient.py` | `OllamaClient(LLMClient)` — implements `chat()` via the `ollama` library and `embed()` via the Ollama REST API; used for both chat and embeddings |
+| `openaiClient.py` | `OpenAICompatibleClient(LLMClient)` — implements `chat()` for `"openai"` and `"openrouter"` providers using the OpenAI Python SDK; does **not** implement `embed()` |
 | `file_utils.py` | `loadfile`, `save_output_to_file` |
 | `code_utils.py` | `extract_snippets` |
 | `excel_utils.py` | `write_metrics_excel`, global Excel helpers (openpyxl) |
 | `logging_config.py` | `setup_logging` |
-| `ollamaClient.py` | `OllamaClient` — `chat()` and `embed()` guard response key access; unexpected Ollama response structure raises `ValueError` with a full traceback in the log |
 | `helpers.py` | Backwards-compatible re-export shim |
 
 ### `ril2m/core.py`
@@ -226,10 +248,26 @@ Houses the `TestCaseVectorStore` and `JavaTestRAG` classes used by both the
 cross-validation builder and the querying phase.
 
 `TestCaseVectorStore` — wraps ChromaDB; provides `add_test_cases()` and `search()`.
-Embeddings are computed **exclusively from the `code` field** so similarity search is
-based on test logic, not on existing annotations.
+Embeddings are computed **exclusively from the `code` field** and **always via `OllamaClient`**,
+regardless of which chat provider is selected. This ensures ChromaDB databases remain consistent
+and reusable across all model/provider combinations.
+
+`_build_chat_client(provider, model, temperature)` — factory function that returns the right
+`LLMClient` implementation:
+- `"ollama"` → `OllamaClient` (connects to `OLLAMAIP` or `ollama-gpu:11434` in CI)
+- `"openai"` → `OpenAICompatibleClient` (reads `OPENAI_API_KEY`)
+- `"openrouter"` → `OpenAICompatibleClient` with OpenRouter base URL (reads `OPENROUTER_API_KEY`)
 
 `JavaTestRAG` — full RAG pipeline: retrieve similar cases → build prompt → query LLM → return response.
+
+Constructor parameters:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `persist_dir` | `"./knowledge_base"` | ChromaDB storage directory |
+| `model` | `"gpt-oss:20b"` | Model tag for the chat LLM |
+| `temperature` | `0.5` | Sampling temperature |
+| `provider` | `"ollama"` | LLM provider — `"ollama"`, `"openai"`, or `"openrouter"` |
+
 `query(test_provided, top_k, resource_file, seed)` accepts a `seed` for reproducible generation.
 
 ### `ril2m/input/context/ragtestcases_<name>.json`
@@ -250,19 +288,63 @@ elasticity model) used by that SUT.
 
 Do not edit these files manually; run `fetch_testcases.py` to regenerate them.
 
+## Selecting an LLM provider
+
+The provider is controlled by the `provider` key in `ril2m/input/config.json`.
+**Ollama is always required** — even when using OpenAI or OpenRouter — because embeddings
+are always generated locally via Ollama to keep ChromaDB vector stores consistent across
+all experiments.
+
+### Ollama (default)
+
+```json
+{ "provider": "ollama", "models": ["gpt-oss:20b", "qwen3-coder:30b"] }
+```
+
+Requires `OLLAMAIP` to be set (or `CI_ENV` for the CI container).
+
+### OpenAI
+
+```json
+{ "provider": "openai", "models": ["gpt-4o", "gpt-4o-mini"] }
+```
+
+Requires the `OPENAI_API_KEY` environment variable.
+
+### OpenRouter
+
+```json
+{ "provider": "openrouter", "models": ["anthropic/claude-opus-4", "google/gemini-2.0-flash-001"] }
+```
+
+Requires the `OPENROUTER_API_KEY` environment variable.
+
 ## Running locally
 
 ```bash
 # 1. Install dependencies
 poetry install
 
-# 2. Start Ollama (GPU container or local install)
+# 2. Start Ollama (always required — used for embeddings regardless of chat provider)
 docker compose up ollama-gpu --detach
 
 # 3. Fetch test cases from GitHub (writes per-repo JSONs)
 poetry run python ril2m/input/fetch_testcases.py
 
 # 4. Build leave-one-out cross-validation ChromaDB databases + query LLM
+#    Set the provider and matching API key before running:
+#
+#    Ollama (default):
+#      export OLLAMAIP=localhost:11434
+#
+#    OpenAI:
+#      export OPENAI_API_KEY=sk-...
+#      # set "provider": "openai" in config.json
+#
+#    OpenRouter:
+#      export OPENROUTER_API_KEY=sk-or-...
+#      # set "provider": "openrouter" in config.json
+#
 poetry run python ril2m/crossvalidation.py
 
 # 5. (optional) Recompute all metrics from saved predictions
@@ -274,11 +356,13 @@ poetry run pytest
 
 ## Environment variables
 
-| Variable       | Description                                           |
-|----------------|-------------------------------------------------------|
-| `GITHUB_TOKEN` | Optional GitHub personal access token (avoids rate limits) |
-| `OLLAMAIP`     | IP/host of the Ollama instance (used when not in CI)  |
-| `CI_ENV`       | When set, Ollama connects to `ollama-gpu:11434`       |
+| Variable             | Required for        | Description |
+|----------------------|---------------------|-------------|
+| `GITHUB_TOKEN`       | All (optional)      | GitHub personal access token — avoids rate limits when fetching repos |
+| `OLLAMAIP`           | All providers       | IP/host of the Ollama instance (used for embeddings in all cases); e.g. `localhost:11434` |
+| `CI_ENV`             | CI only             | When set, Ollama connects to `ollama-gpu:11434` instead of `OLLAMAIP` |
+| `OPENAI_API_KEY`     | `provider=openai`   | OpenAI secret key |
+| `OPENROUTER_API_KEY` | `provider=openrouter` | OpenRouter secret key |
 
 ## CI/CD (Jenkinsfile)
 

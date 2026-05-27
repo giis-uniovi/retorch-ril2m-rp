@@ -3,12 +3,13 @@ import requests
 import logging
 import random
 
-from ril2m.helpers import setup_logging
+from ril2m.helpers.llmClient import LLMClient
+from ril2m.helpers.logging_config import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-class OllamaClient:
+class OllamaClient(LLMClient):
     def __init__(self, base_url: str = "http://ollama-gpu:11434", temperature: float = 0.5,
                  embed_model: str = "nomic-embed-text:v1.5", model: str = "codellama"):
         self.base_url = base_url

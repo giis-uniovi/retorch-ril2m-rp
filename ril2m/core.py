@@ -9,7 +9,7 @@ import os
 from jinja2 import Template
 
 from ril2m.helpers import setup_logging, loadfile, save_output_to_file
-from ril2m.helpers import OllamaClient
+from ril2m.helpers import LLMClient, OllamaClient, OpenAICompatibleClient
 
 TEMPERATURE = 0.5
 DEFAULT_MODEL = "gpt-oss:20b"
@@ -17,6 +17,7 @@ DEFAULT_MODEL_NAME = DEFAULT_MODEL.replace(":", "-")
 EMBED_MODEL = "nomic-embed-text:v1.5"  # ollama pull nomic-embed-text
 COLLECTION_NAME = "example_embeedings2"
 TOP_K = 5  # default value for the number of test cases
+DEFAULT_PROVIDER = "ollama"
 
 URI = "http://" + ("ollama-gpu:11434" if os.getenv("CI_ENV") else os.getenv("OLLAMAIP"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +26,26 @@ CONTEXTS = os.path.join(BASE_DIR, 'input', 'context')
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+
+def _build_chat_client(provider: str, model: str, temperature: float) -> LLMClient:
+    """Instantiate the appropriate chat client for *provider*.
+
+    - ``"ollama"``      → OllamaClient (local, via OLLAMAIP / ollama-gpu)
+    - ``"openai"``      → OpenAICompatibleClient (requires OPENAI_API_KEY)
+    - ``"openrouter"``  → OpenAICompatibleClient (requires OPENROUTER_API_KEY)
+
+    Embeddings are always handled by OllamaClient inside TestCaseVectorStore,
+    regardless of which provider is chosen here.
+    """
+    if provider == "ollama":
+        return OllamaClient(base_url=URI, model=model, embed_model=EMBED_MODEL,
+                            temperature=temperature)
+    if provider in ("openai", "openrouter"):
+        return OpenAICompatibleClient(provider=provider, model=model, temperature=temperature)
+    raise ValueError(
+        f"Unknown provider {provider!r}. Valid values: 'ollama', 'openai', 'openrouter'."
+    )
 
 
 class TestCaseVectorStore:
@@ -122,13 +143,14 @@ class JavaTestRAG:
     operations for Java test-related workflows.
 
     The vector store (ChromaDB + embeddings) is model-agnostic — embeddings are
-    always produced by ``EMBED_MODEL`` and can be shared across LLM experiments.
-    Only the chat LLM changes when *model* / *temperature* differ.
+    always produced by ``EMBED_MODEL`` via Ollama and are shared across LLM experiments.
+    Only the chat LLM changes when *model* / *temperature* / *provider* differ.
 
     Attributes:
        persist_dir (str): directory where the ChromaDB embeddings are stored.
-       model (str): Ollama model used for annotation generation.
+       model (str): model tag used for annotation generation.
        temperature (float): sampling temperature for the LLM.
+       provider (str): LLM provider — ``"ollama"``, ``"openai"``, or ``"openrouter"``.
     """
 
     def __init__(
@@ -136,14 +158,10 @@ class JavaTestRAG:
         persist_dir: str = "./knowledge_base",
         model: str = DEFAULT_MODEL,
         temperature: float = TEMPERATURE,
+        provider: str = DEFAULT_PROVIDER,
     ):
         self.store = TestCaseVectorStore(persist_dir)
-        self.ollama = OllamaClient(
-            temperature=temperature,
-            base_url=URI,
-            model=model,
-            embed_model=EMBED_MODEL,
-        )
+        self.llm = _build_chat_client(provider, model, temperature)
 
     def index_from_file(self, path: str):
         """Load and indexes the embeedings from a file."""
@@ -214,12 +232,11 @@ class JavaTestRAG:
             Path to the resource definitions JSON injected into the prompt.
             Defaults to ``ril2m/input/context/resourcefile.json``.
         seed:
-            Ollama RNG seed for reproducibility.  When ``None`` the OllamaClient
-            picks a random seed.
+            RNG seed for reproducibility.  When ``None`` the client picks a random seed.
         """
         prompt = self.build_prompt(test_provided, top_k, resource_file)
         logger.debug("Prompt sent to LLM:\n%s", prompt)
-        return self.ollama.chat(prompt, seed=seed)
+        return self.llm.chat(prompt, seed=seed)
 
 
 if __name__ == "__main__":

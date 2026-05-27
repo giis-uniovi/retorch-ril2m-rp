@@ -6,5 +6,7 @@ from .excel_utils import (
     write_metrics_excel,
 )
 from .file_utils import loadfile, save_output_to_file
+from .llmClient import LLMClient
 from .logging_config import setup_logging
 from .ollamaClient import OllamaClient
+from .openaiClient import OpenAICompatibleClient

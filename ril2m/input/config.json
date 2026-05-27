@@ -1,4 +1,5 @@
 {
+  "provider": "ollama",
   "n_runs": 3,
   "top_k": 5,
   "base_seed": 42,
