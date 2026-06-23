@@ -25,7 +25,7 @@ jobs:
              -d "{\"state\":\"pending\", \"context\":\"Jenkins CI\"}"
 
       - name: Clone the project
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - if: github.actor != 'dependabot[bot]'
         name: Run SonarQube
         uses: javiertuya/sonarqube-action@v1.4.4
